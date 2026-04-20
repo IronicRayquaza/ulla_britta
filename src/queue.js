@@ -1,4 +1,7 @@
-const Redis = require('ioredis');
+import Redis from 'ioredis';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const QUEUE_NAME = 'ulla_britta_events';
@@ -15,7 +18,6 @@ class QueueService {
     }
 
     async dequeue() {
-        // Blocking pop - waits for an item
         const result = await this.client.brpop(QUEUE_NAME, 0);
         if (result) {
             return JSON.parse(result[1]);
@@ -24,4 +26,4 @@ class QueueService {
     }
 }
 
-module.exports = new QueueService();
+export default new QueueService();

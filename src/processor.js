@@ -1,12 +1,12 @@
-const { analyzeCommits } = require('./services/ai.service');
-const { generatePDF } = require('./services/pdf.service');
-const { sendEmail } = require('./services/email.service');
-const { performDiagnostics, handleConflict } = require('./services/healing.service');
-const axios = require('axios');
+import { analyzeCommits } from './services/ai.service.js';
+import { generatePDF } from './services/pdf.service.js';
+import { sendEmail } from './services/email.service.js';
+import { performDiagnostics, handleConflict } from './services/healing.service.js';
+import axios from 'axios';
 
-async function processEvent(event) {
+export async function processEvent(event) {
     const { type, payload } = event;
-    const installationId = payload.installation?.id; // Needed for GitHub App
+    const installationId = payload.installation?.id;
     const repository = payload.repository.full_name;
 
     console.log(`Working on ${type} for ${repository}...`);
@@ -16,7 +16,6 @@ async function processEvent(event) {
             const analysis = await analyzeCommits(payload.commits, repository);
             const pdfPath = await generatePDF(analysis);
             await sendEmail(pdfPath, repository);
-            console.log(`✅ [NARRATOR] Report sent.`);
         } 
         
         else if (type === 'workflow_run' || type === 'check_run') {
@@ -32,7 +31,6 @@ async function processEvent(event) {
             if (payload.action !== 'opened' && payload.action !== 'synchronize') return;
             
             let pr = payload.pull_request;
-            // Wait for mergeable
             for (let i = 0; i < 5; i++) {
                 if (pr.mergeable !== null && pr.mergeable !== undefined) break;
                 await new Promise(r => setTimeout(r, 4000));
@@ -48,7 +46,6 @@ async function processEvent(event) {
         }
     } catch (error) {
         console.error(`Error processing ${type}:`, error.message);
+        throw error; // Rethrow for the worker to handle retry
     }
 }
-
-module.exports = { processEvent };

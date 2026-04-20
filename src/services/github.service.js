@@ -1,5 +1,8 @@
-const { App } = require('@octokit/app');
-const { Octokit } = require('@octokit/rest');
+import { App } from '@octokit/app';
+import { Octokit } from '@octokit/rest';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 /**
  * Service to handle GitHub App authentication and API interactions.
@@ -33,12 +36,12 @@ class GitHubService {
   }
 
   /**
-   * Verifies the webhook signature (Essential for production)
+   * Verifies the webhook signature
    */
   verifySignature(payload, signature) {
-    if (!this.secret || !signature) return true; // Skip if no secret configured
+    if (!this.secret || !signature) return true;
     return this.app.webhooks.verify(payload, signature);
   }
 }
 
-module.exports = new GitHubService();
+export default new GitHubService();

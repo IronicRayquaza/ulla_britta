@@ -1,12 +1,12 @@
-const express = require('express');
-const dotenv = require('dotenv');
-const githubService = require('./services/github.service');
-const queueService = require('./queue');
-const axios = require('axios');
+import express from 'express';
+import dotenv from 'dotenv';
+import githubService from './services/github.service.js';
+import queueService from './queue.js';
+import axios from 'axios';
 
 dotenv.config();
 
-// 1. SECRETS VALIDATION (Fail Fast)
+// SECRETS VALIDATION
 const REQUIRED_VARS = ['GEMINI_API_KEY', 'GITHUB_TOKEN', 'REDIS_URL'];
 REQUIRED_VARS.forEach(v => {
   if (!process.env[v]) {
@@ -21,7 +21,6 @@ const REPO = process.env.TARGET_REPO;
 
 app.use(express.json());
 
-// 2. HEALTH CHECK (For Monitoring)
 app.get('/health', async (req, res) => {
   try {
     const redisStatus = await queueService.client.ping();
@@ -35,12 +34,10 @@ app.post('/webhook', async (req, res) => {
   const event = req.headers['x-github-event'];
   const payload = req.body;
 
-  // 3. SPAM GUARD (Infinite Loop Prevention)
   const isBot = payload.sender?.type === 'Bot' || payload.sender?.login?.includes('[bot]');
   const isAiCommit = payload.commits?.some(c => c.message.includes('[AI-AUTO-FIX]'));
   
   if (isBot || isAiCommit) {
-    console.log(`⏭️ Ignored event from bot or AI-auto-fix.`);
     return res.status(200).send('Ignored');
   }
 
