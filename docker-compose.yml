@@ -1,0 +1,38 @@
+services:
+  # 1. Redis (The Queue)
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  # 2. Webhook Receiver (The Ingestion Tier)
+  receiver:
+    build: .
+    command: node src/index.js
+    ports:
+      - "3000:3000"
+    depends_on:
+      - redis
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - PORT=3000
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_APP_ID=${GITHUB_APP_ID}
+      - GITHUB_PRIVATE_KEY=${GITHUB_PRIVATE_KEY}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+
+  # 3. Worker (The Processing Tier)
+  worker:
+    build: .
+    command: node src/worker.js
+    depends_on:
+      - redis
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_APP_ID=${GITHUB_APP_ID}
+      - GITHUB_PRIVATE_KEY=${GITHUB_PRIVATE_KEY}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - EMAIL_RECIPIENT=${EMAIL_RECIPIENT}
