@@ -6,37 +6,50 @@ const axios = require('axios');
 
 dotenv.config();
 
+// 1. SECRETS VALIDATION (Fail Fast)
+const REQUIRED_VARS = ['GEMINI_API_KEY', 'GITHUB_TOKEN', 'REDIS_URL'];
+REQUIRED_VARS.forEach(v => {
+  if (!process.env[v]) {
+    console.error(`❌ CRITICAL: Missing environment variable: ${v}`);
+    process.exit(1);
+  }
+});
+
 const app = express();
 const port = process.env.PORT || 3000;
 const REPO = process.env.TARGET_REPO;
 
 app.use(express.json());
 
-// Main Webhook Ingestion Endpoint
+// 2. HEALTH CHECK (For Monitoring)
+app.get('/health', async (req, res) => {
+  try {
+    const redisStatus = await queueService.client.ping();
+    res.status(200).json({ status: 'healthy', redis: redisStatus === 'PONG' });
+  } catch (err) {
+    res.status(503).json({ status: 'degraded', error: err.message });
+  }
+});
+
 app.post('/webhook', async (req, res) => {
   const event = req.headers['x-github-event'];
-  const signature = req.headers['x-hub-signature-256'];
   const payload = req.body;
 
-  // 1. Security Check (Signature Verification)
-  // For production, uncomment this and add GITHUB_WEBHOOK_SECRET to .env
-  /*
-  if (!githubService.verifySignature(JSON.stringify(payload), signature)) {
-    return res.status(401).send('Invalid signature');
-  }
-  */
-
-  // 2. Filter out bot's own commits to avoid infinite loops
-  if (payload.commits && payload.commits.some(c => c.message.includes('[AI-AUTO-FIX]'))) {
-    return res.status(200).send('Ignored (self-trigger)');
+  // 3. SPAM GUARD (Infinite Loop Prevention)
+  const isBot = payload.sender?.type === 'Bot' || payload.sender?.login?.includes('[bot]');
+  const isAiCommit = payload.commits?.some(c => c.message.includes('[AI-AUTO-FIX]'));
+  
+  if (isBot || isAiCommit) {
+    console.log(`⏭️ Ignored event from bot or AI-auto-fix.`);
+    return res.status(200).send('Ignored');
   }
 
-  // 3. Queue the event for the Worker
   try {
       await queueService.enqueue({
           type: event,
           payload: payload,
-          id: req.headers['x-github-delivery']
+          id: req.headers['x-github-delivery'],
+          retryCount: 0
       });
       res.status(202).send('Queued');
   } catch (err) {
@@ -45,46 +58,6 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-/**
- * Auto-Config Logic for easy setup
- */
-async function autoConfigureWebhook() {
-  if (!REPO) {
-    console.warn('⚠️ TARGET_REPO not set. Auto-config skipped.');
-    return;
-  }
-
-  console.log(`🛠️  [CONFIG] Auto-configuring webhook for ${REPO}...`);
-  try {
-    const ngrokRes = await axios.get('http://127.0.0.1:4040/api/tunnels');
-    const publicUrl = ngrokRes.data.tunnels[0].public_url + '/webhook';
-    console.log(`🔗 [CONFIG] Your Public URL: ${publicUrl}`);
-
-    const headers = { Authorization: `token ${process.env.GITHUB_TOKEN}` };
-    const { data: hooks } = await axios.get(`https://api.github.com/repos/${REPO}/hooks`, { headers });
-    
-    // Find existing webhook or create new
-    const existingHook = hooks.find(h => h.config.url.includes('ngrok'));
-    
-    const hookConfig = {
-        config: { url: publicUrl, content_type: 'json', secret: process.env.GITHUB_WEBHOOK_SECRET || 'development_secret' },
-        events: ['push', 'pull_request', 'workflow_run', 'check_run'],
-        active: true
-    };
-
-    if (existingHook) {
-      await axios.patch(`https://api.github.com/repos/${REPO}/hooks/${existingHook.id}`, hookConfig, { headers });
-      console.log('✅ [CONFIG] Webhook updated.');
-    } else {
-      await axios.post(`https://api.github.com/repos/${REPO}/hooks`, { name: 'web', ...hookConfig }, { headers });
-      console.log('✅ [CONFIG] New Webhook created.');
-    }
-  } catch (error) {
-    console.warn('⚠️ Auto-config failed. ' + error.message);
-  }
-}
-
-app.listen(port, async () => {
-  console.log(`🚀 CodeNarrator Ingestion Tier running on port ${port}`);
-  await autoConfigureWebhook();
+app.listen(port, () => {
+    console.log(`🚀 Ingestion Tier online. Monitoring at /health`);
 });
