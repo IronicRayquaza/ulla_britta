@@ -1,5 +1,5 @@
-import queueService from './queue.js';
-import { processEvent } from './processor.js';
+import queueService from './queue.mjs';
+import { processEvent } from './processor.mjs';
 import dotenv from 'dotenv';
 
 dotenv.config();

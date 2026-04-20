@@ -1,7 +1,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
-import githubService from './services/github.service.js';
-import queueService from './queue.js';
+import githubService from './services/github.service.mjs';
+import queueService from './queue.mjs';
 import axios from 'axios';
 
 dotenv.config();

@@ -8,7 +8,7 @@ services:
   # 2. Webhook Receiver (The Ingestion Tier)
   receiver:
     build: .
-    command: node src/index.js
+    command: node src/index.mjs
     ports:
       - "3000:3000"
     depends_on:
@@ -25,7 +25,7 @@ services:
   # 3. Worker (The Processing Tier)
   worker:
     build: .
-    command: node src/worker.js
+    command: node src/worker.mjs
     depends_on:
       - redis
     environment:

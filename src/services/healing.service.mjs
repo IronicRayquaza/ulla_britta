@@ -1,8 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { analyzeWithGemini } from './ai.service.js';
-import githubService from './github.service.js';
+import { analyzeWithGemini } from './ai.service.mjs';
+import githubService from './github.service.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

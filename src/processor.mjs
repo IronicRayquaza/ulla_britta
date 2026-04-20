@@ -1,7 +1,7 @@
-import { analyzeCommits } from './services/ai.service.js';
-import { generatePDF } from './services/pdf.service.js';
-import { sendEmail } from './services/email.service.js';
-import { performDiagnostics, handleConflict } from './services/healing.service.js';
+import { analyzeCommits } from './services/ai.service.mjs';
+import { generatePDF } from './services/pdf.service.mjs';
+import { sendEmail } from './services/email.service.mjs';
+import { performDiagnostics, handleConflict } from './services/healing.service.mjs';
 import axios from 'axios';
 
 export async function processEvent(event) {
@@ -46,6 +46,6 @@ export async function processEvent(event) {
         }
     } catch (error) {
         console.error(`Error processing ${type}:`, error.message);
-        throw error; // Rethrow for the worker to handle retry
+        throw error;
     }
 }
