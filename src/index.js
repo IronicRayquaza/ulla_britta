@@ -1,6 +1,6 @@
 const express = require('express');
+const axios = require('axios');
 const dotenv = require('dotenv');
-const { Webhooks } = require('@octokit/webhooks');
 const { analyzeCommits } = require('./services/ai.service');
 const { generatePDF } = require('./services/pdf.service');
 const { sendEmail } = require('./services/email.service');
@@ -10,176 +10,160 @@ dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
+const REPO = process.env.TARGET_REPO; 
 
-const webhooks = new Webhooks({
-  secret: process.env.GITHUB_WEBHOOK_SECRET || 'development_secret',
-});
+// Lock to prevent concurrent "Surgeries" on the same run
+const activeRuns = new Set();
 
-// Manual body parser to ensure we have the raw body for signature
-app.use(express.raw({ type: 'application/json' }));
+app.use(express.json());
 
 app.post('/webhook', async (req, res) => {
-  console.log('--- Incoming Webhook Request ---');
-  const signature = req.headers['x-hub-signature-256'];
   const event = req.headers['x-github-event'];
+  const payload = req.body;
   const id = req.headers['x-github-delivery'];
-  const rawBody = req.body.toString();
 
-  console.log(`Manual Webhook Entry: Event=${event}, ID=${id}`);
+  console.log(`>>> [${new Date().toISOString()}] Received: ${event} (ID: ${id})`);
+  res.status(202).send('Accepted'); // 202 Accepted is more appropriate for async tasks
 
   try {
-    await webhooks.verifyAndReceive({
-      id,
-      name: event,
-      payload: rawBody,
-      signature,
-    });
-    res.status(200).send('ok');
+    switch(event) {
+      case 'push':
+        await handlePush(payload, id);
+        break;
+      case 'pull_request':
+        await handlePullRequest(payload, id);
+        break;
+      case 'workflow_run':
+      case 'check_run':
+        await handleBuildFailure(event, payload, id);
+        break;
+      case 'ping':
+        console.log('✨ GitHub Connection Verified (Ping)');
+        break;
+      default:
+        console.log(`ℹ️ Ignored event: ${event}`);
+    }
   } catch (error) {
-    console.error('Webhook Verification Failed:', error.message);
-    res.status(401).send('verification failed');
+    console.error(`❌ Error in event loop (${event}):`, error.message);
   }
 });
 
-// 1. Push Event Handler (Reports)
-webhooks.on('push', async ({ id, name, payload }) => {
-  // Ignore commits made by the AI to prevent feedback loops
-  if (payload.commits && payload.commits.some(c => c.message.includes('[AI-AUTO-FIX]'))) {
-    console.log(`Skipping report generation for AI-triggered commit.`);
-    return;
-  }
+// --- Event Handlers ---
 
-  console.log(`Received push event: ${id}`);
+async function handlePush(payload, id) {
+  if (payload.commits && payload.commits.some(c => c.message.includes('[AI-AUTO-FIX]'))) return;
+
   const repository = payload.repository.full_name;
-  const commits = payload.commits;
+  console.log(`📝 [NARRATOR] Analyzing new push to ${repository}...`);
   
-  (async () => {
-    try {
-      const analysis = await analyzeCommits(commits, repository);
-      const pdfPath = await generatePDF(analysis);
-      await sendEmail(pdfPath, repository);
-      console.log(`Successfully processed event ${id}. Report path: ${pdfPath}`);
-    } catch (error) {
-      console.error(`Failed background process ${id}:`, error.message);
-    }
-  })();
-});
-
-// 2. Pull Request Event Handler (Reports + Conflicts)
-webhooks.on('pull_request', async ({ id, name, payload }) => {
-  const repository = payload.repository.full_name;
-  const pr = payload.pull_request;
-
-  if (payload.action === 'opened' || payload.action === 'synchronize') {
-    console.log(`Analyzing PR #${pr.number} for conflicts...`);
-    
-    // Sometimes mergeable is null while GitHub calculates it
-    // We wait and check again if needed
-    (async () => {
-        try {
-            let mergeable = pr.mergeable;
-            if (mergeable === null) {
-                console.log(`Mergeable status null, waiting...`);
-                await new Promise(r => setTimeout(r, 5000));
-                // We'd ideally re-fetch the PR state here, but for now we proceed
-                // and handle errors in handleConflict
-            }
-
-            if (mergeable === false) {
-                console.log(`⚠️ Conflict detected in PR #${pr.number} (${repository}).`);
-                await handleConflict(pr.number, repository, pr.head.ref, pr.base.ref);
-            }
-        } catch (err) {
-            console.error('Error in PR conflict processing:', err.message);
-        }
-    })();
+  try {
+    const analysis = await analyzeCommits(payload.commits, repository);
+    const pdfPath = await generatePDF(analysis);
+    await sendEmail(pdfPath, repository);
+    console.log(`✅ [NARRATOR] Report sent successfully.`);
+  } catch (error) {
+    console.error(`❌ [NARRATOR] Failed:`, error.message);
   }
+}
 
+async function handlePullRequest(payload, id) {
+  const repository = payload.repository.full_name;
+  let pr = payload.pull_request;
+  
   if (payload.action !== 'opened' && payload.action !== 'synchronize') return;
-  
-  console.log(`Received Pull Request event: ${id} (${payload.action})`);
-  
-  const mockCommits = [{
-    id: pr.head.sha,
-    message: `PR #${pr.number}: ${pr.title}\n\n${pr.body || ''}`,
-    author: { name: payload.sender.login }
-  }];
 
-  (async () => {
-    try {
-      const analysis = await analyzeCommits(mockCommits, repository);
-      const pdfPath = await generatePDF(analysis);
-      await sendEmail(pdfPath, repository);
-      console.log(`Successfully processed PR ${id}. Report path: ${pdfPath}`);
-    } catch (error) {
-      console.error(`Failed background process PR ${id}:`, error.message);
-    }
-  })();
-});
-
-// 4. Check Run Event Handler (External Deployments like Vercel)
-webhooks.on('check_run', async ({ id, name, payload }) => {
-  if (payload.action !== 'completed') return;
+  console.log(`🔍 [MEDIATOR] Checking PR #${pr.number} for conflicts...`);
   
-  const { conclusion, check_run } = payload;
-  const repository = payload.repository.full_name;
-
-  if (conclusion === 'failure') {
-    console.log(`⚠️ External Check Failure detected: ${check_run.name} in ${repository}`);
-    
-    // For external checks, we don't always have a workflow ID, 
-    // but we can try to diagnose based on the check's output/summary.
-    (async () => {
-      try {
-        console.log(`Starting Diagnostics for external failure: ${check_run.name}...`);
-        
-        // We pass a 'null' runId but the actual check_run object for context
-        const fix = await performDiagnostics(null, repository, check_run);
-        if (fix) {
-           console.log(`✅ [EXTERNAL-FIX] Success: ${fix.explanation}`);
-        }
-      } catch (error) {
-        console.error('External healing failed:', error.message);
-      }
-    })();
+  // Wait for GitHub to calculate mergeability (can take a few seconds)
+  for (let i = 0; i < 5; i++) {
+    if (pr.mergeable !== null && pr.mergeable !== undefined) break;
+    console.log(`   ...Waiting for mergeable status (attempt ${i+1})`);
+    await new Promise(r => setTimeout(r, 4000));
+    const { data } = await axios.get(pr.url, {
+        headers: { Authorization: `token ${process.env.GITHUB_TOKEN}` }
+    });
+    pr = data;
   }
-});
-webhooks.on('workflow_run', async ({ id, name, payload }) => {
-  if (payload.action !== 'completed') return;
+
+  if (pr.mergeable === false) {
+      console.log(`💥 [MEDIATOR] Conflict confirmed in PR #${pr.number}. Starting resolution...`);
+      await handleConflict(pr.number, repository, pr.head.ref, pr.base.ref);
+  } else {
+      console.log(`✅ [MEDIATOR] No conflicts found for PR #${pr.number}.`);
+  }
+}
+
+async function handleBuildFailure(event, payload, id) {
+  const repository = payload.repository.full_name;
+  const isWorkflow = event === 'workflow_run';
+  const data = isWorkflow ? payload.workflow_run : payload.check_run;
+  const runId = isWorkflow ? data.id : data.id; // Same for both
+  const branch = isWorkflow ? data.head_branch : (data.check_suite ? data.check_suite.head_branch : 'master');
+
+  if (payload.action !== 'completed' || data.conclusion !== 'failure') return;
   
-  // Ignore workflow runs triggered by the AI to prevent feedback loops
-  if (payload.workflow_run.head_commit && payload.workflow_run.head_commit.message.includes('[AI-AUTO-FIX]')) {
-    console.log(`Skipping self-healing for AI-triggered run: ${payload.workflow_run.id}`);
+  // Guard against loops
+  if (isWorkflow && data.head_commit && data.head_commit.message.includes('[AI-AUTO-FIX]')) return;
+
+  if (activeRuns.has(runId)) {
+    console.log(`⏭️ [SURGEON] Run ${runId} already being handled. Skipping.`);
     return;
   }
 
-  const conclusion = payload.workflow_run.conclusion;
+  activeRuns.add(runId);
+  console.log(`🚑 [SURGEON] Build failed on branch [${branch}]. Starting surgery...`);
   
-  if (conclusion === 'failure') {
-    console.log(`⚠️ Build Failure detected in ${payload.repository.full_name}!`);
-    const workflowId = payload.workflow_run.id;
-    const repoName = payload.repository.full_name;
-    
-    (async () => {
-      try {
-        console.log(`Starting Self-Healing Diagnostics for workflow ${workflowId}...`);
-        const fix = await performDiagnostics(workflowId, repoName);
-        if (fix) {
-           console.log(`✅ [SELF-HEALING] Success: ${fix.explanation}`);
-        } else {
-           console.log('⚠️ [SELF-HEALING] Could not automatically fix this error.');
-        }
-      } catch (error) {
-        console.error('Self-Healing failed:', error.message);
-      }
-    })();
+  try {
+    const fix = await performDiagnostics(runId, repository, isWorkflow ? null : data, branch);
+    if (fix) {
+       console.log(`✨ [SURGEON] Successfully applied fix: ${fix.explanation}`);
+    }
+  } catch (error) {
+    console.error('❌ [SURGEON] Surgery failed:', error.message);
+  } finally {
+    activeRuns.delete(runId);
   }
-});
+}
 
-webhooks.on('ping', async ({ payload }) => {
-  console.log(`Received ping: ${payload.zen}`);
-});
+// --- Auto-Config Logic ---
 
-app.listen(port, () => {
-  console.log(`CodeNarrator listening at http://localhost:${port}`);
+async function autoConfigureWebhook() {
+  if (!REPO) {
+    console.warn('⚠️ TARGET_REPO not set in .env. Skipping auto-webhook configuration.');
+    return;
+  }
+
+  console.log(`🛠️  [CONFIG] Auto-configuring webhook for ${REPO}...`);
+  try {
+    const ngrokRes = await axios.get('http://127.0.0.1:4040/api/tunnels');
+    const publicUrl = ngrokRes.data.tunnels[0].public_url + '/webhook';
+    console.log(`🔗 [CONFIG] Your Public URL: ${publicUrl}`);
+
+    const headers = { Authorization: `token ${process.env.GITHUB_TOKEN}` };
+    const { data: hooks } = await axios.get(`https://api.github.com/repos/${REPO}/hooks`, { headers });
+    
+    // Find existing webhook or create new
+    const existingHook = hooks.find(h => h.config.url.includes('ngrok'));
+    
+    const hookConfig = {
+        config: { url: publicUrl, content_type: 'json' },
+        events: ['push', 'pull_request', 'workflow_run', 'check_run'],
+        active: true
+    };
+
+    if (existingHook) {
+      await axios.patch(`https://api.github.com/repos/${REPO}/hooks/${existingHook.id}`, hookConfig, { headers });
+      console.log('✅ [CONFIG] Webhook updated.');
+    } else {
+      await axios.post(`https://api.github.com/repos/${REPO}/hooks`, { name: 'web', ...hookConfig }, { headers });
+      console.log('✅ [CONFIG] New Webhook created.');
+    }
+  } catch (error) {
+    console.error('❌ [CONFIG] Failed to auto-configure webhook:', error.message);
+  }
+}
+
+app.listen(port, async () => {
+  console.log(`🚀 CodeNarrator listening on port ${port}`);
+  await autoConfigureWebhook();
 });

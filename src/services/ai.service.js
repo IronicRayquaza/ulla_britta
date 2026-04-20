@@ -110,9 +110,11 @@ async function analyzeWithGemini(prompt) {
         console.log(`Success! Using ${version}/${model}`);
         return text;
       } catch (error) {
-        if (error.response && error.response.status !== 404) {
-          console.error(`Gemini Error (${error.response.status}):`, JSON.stringify(error.response.data));
+        if (error.response && error.response.status === 429) {
+          console.warn(`⚠️ Rate limit hit for ${model}. Waiting 5 seconds...`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
         }
+        console.error(`Gemini Error (${error.response ? error.response.status : 'Local'}):`, error.response ? JSON.stringify(error.response.data) : error.message);
       }
     }
   }
