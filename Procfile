@@ -1,2 +1,2 @@
-web: node src/index.mjs
+web: node src/solo_start.mjs
 worker: node src/worker.mjs
