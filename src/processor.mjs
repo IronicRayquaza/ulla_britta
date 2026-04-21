@@ -7,39 +7,51 @@ import axios from 'axios';
 export async function processEvent(event) {
     const { type, payload } = event;
     const installationId = payload.installation?.id;
-    
-    // SAFETY: Not all events have a repository (e.g. installation, organization)
     const repository = payload.repository?.full_name;
+
     if (!repository) {
-        console.log(`ℹ️ [SKIP] Event ${type} does not have repository context.`);
         return;
     }
 
-    console.log(`\n👨‍💻 Working on ${type} for ${repository}...`);
-
     try {
         if (type === 'push') {
+            console.log(`\n👨‍💻 Processing push for ${repository}...`);
             const analysis = await analyzeCommits(payload.commits, repository);
             const pdfPath = await generatePDF(analysis);
             await sendEmail(pdfPath, repository);
-            console.log(`✅ [NARRATOR] Report sent successfully.`);
         } 
         
         else if (type === 'workflow_run' || type === 'check_run') {
             const isWorkflow = type === 'workflow_run';
             const data = isWorkflow ? payload.workflow_run : payload.check_run;
             
-            // Only act if it's a failure
-            const isFailure = data.conclusion === 'failure' || data.status === 'completed' && data.conclusion === 'failure';
-            if (!isFailure) return;
+            const status = data.status;
+            const conclusion = data.conclusion;
 
+            console.log(`\n⚙️  Event [${type}] for ${repository} | Status: ${status} | Conclusion: ${conclusion}`);
+
+            // We ONLY act if it is COMPLETED and FAILED
+            const isFinished = status === 'completed';
+            const isFailure = conclusion === 'failure';
+
+            if (!isFinished) {
+                console.log(`⏳ Skipping: Run is still ${status}.`);
+                return;
+            }
+
+            if (!isFailure) {
+                console.log(`✅ Skipping: Run succeeded (Conclusion: ${conclusion}).`);
+                return;
+            }
+
+            console.log(`🚨 Failure detected! Starting autonomous repair...`);
             const runId = data.id;
             const branch = isWorkflow ? data.head_branch : (data.check_suite?.head_branch || 'master');
-
             await performDiagnostics(installationId, repository, runId, isWorkflow ? null : data, branch);
         }
 
         else if (type === 'pull_request') {
+            console.log(`\n⚖️  Processing PR #${payload.pull_request.number} for ${repository}...`);
             if (payload.action !== 'opened' && payload.action !== 'synchronize') return;
             
             let pr = payload.pull_request;
@@ -53,14 +65,12 @@ export async function processEvent(event) {
             }
 
             if (pr.mergeable === false) {
+                console.log(`⚔️  Conflict detected in PR #${pr.number}. Starting mediation...`);
                 await handleConflict(installationId, pr.number, repository, pr.head.ref, pr.base.ref);
             }
         }
     } catch (error) {
-        console.error(`❌ Error processing ${type}:`, error.message);
-        if (error.response?.data) {
-            console.error('Error Details:', JSON.stringify(error.response.data));
-        }
+        console.error(`❌ Error in ${type}:`, error.message);
         throw error;
     }
 }

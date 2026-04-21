@@ -37,6 +37,7 @@ async function fetchFileContent(client, owner, repo, filePath, branch) {
 
 async function commitRemotely(client, owner, repo, fix, branch) {
   try {
+    console.log(`📡 Sending fix to GitHub API...`);
     for (const file of fix.filesToFix) {
       let sha;
       try {
@@ -50,21 +51,28 @@ async function commitRemotely(client, owner, repo, fix, branch) {
         content: Buffer.from(file.newContent).toString('base64'),
         sha, branch
       });
+      console.log(`✅ File ${file.path} updated!`);
     }
     return true;
   } catch (error) {
+    console.error(`❌ Remote commit failed:`, error.message);
     return false;
   }
 }
 
 async function fetchFailedLogs(client, owner, repo, runId) {
+    // Wait a few seconds for GitHub to finalize the logs
+    await new Promise(r => setTimeout(r, 6000));
     try {
         const { data: jobsData } = await client.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: runId });
         const failedJob = jobsData.jobs.find(j => j.conclusion === 'failure');
-        if (!failedJob) return "No failure found.";
+        if (!failedJob) return "No failure found in job list.";
+        
+        console.log(`📖 Fetching logs for job: ${failedJob.name}`);
         const { data: logs } = await client.rest.actions.downloadJobLogsForWorkflowRun({ owner, repo, job_id: failedJob.id });
         return logs.substring(0, 15000);
     } catch (error) {
+        console.error(`Log fetch error:`, error.message);
         return "Log retrieval failed.";
     }
 }
@@ -73,17 +81,28 @@ export async function performDiagnostics(installationId, repoFull, runId, checkR
   const [owner, repo] = repoFull.split('/');
   const client = await githubService.getClient(installationId);
   
-  if (runId && getRegistry().processedRuns.includes(runId)) return null;
+  if (runId && getRegistry().processedRuns.includes(runId)) {
+      console.log(`⏩ Skipping: Run ${runId} was already repaired.`);
+      return null;
+  }
 
   try {
+    console.log(`🩺 Diagnosing failure in ${repoFull}...`);
     let logData = (runId) ? await fetchFailedLogs(client, owner, repo, runId) : "External check data";
+    
+    if (logData.length < 50) {
+        throw new Error("Failure logs are too short or empty.");
+    }
+
     const { data: treeData } = await client.rest.git.getTree({ owner, repo, tree_sha: branch, recursive: true });
     const repoStructure = treeData.tree.map(i => `${i.type === 'tree' ? '[DIR]' : '[FILE]'} ${i.path}`).join('\n');
     
-    const fileAnalysisPrompt = `Build failed. LOGS:\n${logData}\n\nSTRUCTURE:\n${repoStructure}\nIdentify faulty files (comma-separated).`;
+    console.log(`🧠 Consulting Gemini for the fix...`);
+    const fileAnalysisPrompt = `Build failed. LOGS:\n${logData}\n\nSTRUCTURE:\n${repoStructure}\nIdentify faulty files (comma-separated pathways only).`;
     const suspectedFilesRaw = await analyzeWithGemini(fileAnalysisPrompt);
     const suspectedFiles = suspectedFilesRaw.split(',').map(f => f.trim().replace(/['"]/g, ''));
 
+    console.log(`📂 Inspecting files: ${suspectedFiles.join(', ')}`);
     let fileContents = "";
     for (const filePath of suspectedFiles) {
         const content = await fetchFileContent(client, owner, repo, filePath, branch);
@@ -94,10 +113,13 @@ export async function performDiagnostics(installationId, repoFull, runId, checkR
     const rawFix = await analyzeWithGemini(prompt);
     const fix = JSON.parse(rawFix.replace(/```json|```/g, '').trim());
     
+    console.log(`💉 Applying fix: ${fix.explanation}`);
     const success = await commitRemotely(client, owner, repo, fix, branch);
     if (success && runId) updateRegistry('processedRuns', runId);
+    console.log(`🏁 Surgery complete.`);
     return fix;
   } catch (error) {
+    console.error(`❌ Surgery failed:`, error.message);
     return null;
   }
 }
