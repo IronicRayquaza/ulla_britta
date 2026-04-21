@@ -45,7 +45,20 @@ export async function processEvent(event) {
             }
 
             console.log(`🚨 Failure detected! Starting autonomous repair...`);
-            const runId = data.id;
+            
+            // MAP to the correct Workflow Run ID
+            let runId = isWorkflow ? data.id : null;
+            
+            // If it's a check_run, we need to find the associated workflow run
+            if (type === 'check_run' && data.check_suite?.workflow_run_id) {
+                runId = data.check_suite.workflow_run_id;
+            }
+
+            if (!runId) {
+                console.log(`⚠️  Could not resolve a Workflow Run ID for this ${type}. Skipping log fetch.`);
+                return;
+            }
+
             const branch = isWorkflow ? data.head_branch : (data.check_suite?.head_branch || 'master');
             await performDiagnostics(installationId, repository, runId, isWorkflow ? null : data, branch);
         }
