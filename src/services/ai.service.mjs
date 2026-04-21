@@ -1,3 +1,4 @@
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import dotenv from 'dotenv';
 import axios from 'axios';
 
@@ -34,34 +35,21 @@ export async function analyzeCommits(commits, repoName) {
 
 export async function analyzeWithGemini(prompt) {
   const apiKey = process.env.GEMINI_API_KEY;
-  const models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro'];
-  const versions = ['v1beta', 'v1'];
-
   if (!apiKey) throw new Error('GEMINI_API_KEY is not configured.');
 
-  const requestBody = {
-    contents: [{ parts: [{ text: prompt }] }]
-  };
-
-  let lastError = null;
-
-  for (const model of models) {
-    for (const version of versions) {
-      const url = `https://generativelanguage.googleapis.com/${version}/models/${model}:generateContent?key=${apiKey}`;
-      try {
-        const response = await axios.post(url, requestBody);
-        return response.data.candidates[0].content.parts[0].text;
-      } catch (error) {
-        lastError = error;
-        console.error(`AI Model ${model} (${version}) failure:`, error.response?.data?.error?.message || error.message);
-        
-        if (error.response?.status === 429) {
-          console.warn('Quota Exceeded. Waiting 5s...');
-          await new Promise(r => setTimeout(r, 5000));
-        }
-      }
-    }
-  }
+  const genAI = new GoogleGenerativeAI(apiKey);
   
-  throw new Error(`All Gemini models failed. Last error: ${lastError?.response?.data?.error?.message || lastError?.message}`);
+  // Set to EXACT model name requested by user
+  const modelName = 'gemini-3-flash-preview';
+  
+  try {
+    console.log(`🤖 Consulting ${modelName}...`);
+    const model = genAI.getGenerativeModel({ model: modelName });
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    return response.text();
+  } catch (error) {
+    console.error(`AI Error (${modelName}):`, error.message);
+    throw new Error(`Failed to consult ${modelName}: ${error.message}`);
+  }
 }
