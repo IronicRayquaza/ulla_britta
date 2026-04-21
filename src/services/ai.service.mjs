@@ -1,4 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk';
 import dotenv from 'dotenv';
 import axios from 'axios';
 
@@ -22,7 +21,7 @@ export async function analyzeCommits(commits, repoName) {
     commitData += `\n--- COMMIT ${c.id.substring(0, 7)} ---\nMessage: ${c.message}\nDiff:\n${diff}\n`;
   }
 
-  const prompt = `Analyze these changes for ${repoName}:\n${commitData}\nProvide a technical report.`;
+  const prompt = `Analyze these changes for ${repoName} and provide a formal DevOps report. Highlight any potential risks or improvements.\n\nCHANGES:\n${commitData}`;
   const summary = await analyzeWithGemini(prompt);
 
   return {
@@ -38,9 +37,13 @@ export async function analyzeWithGemini(prompt) {
   const models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro'];
   const versions = ['v1beta', 'v1'];
 
+  if (!apiKey) throw new Error('GEMINI_API_KEY is not configured.');
+
   const requestBody = {
     contents: [{ parts: [{ text: prompt }] }]
   };
+
+  let lastError = null;
 
   for (const model of models) {
     for (const version of versions) {
@@ -49,11 +52,16 @@ export async function analyzeWithGemini(prompt) {
         const response = await axios.post(url, requestBody);
         return response.data.candidates[0].content.parts[0].text;
       } catch (error) {
+        lastError = error;
+        console.error(`AI Model ${model} (${version}) failure:`, error.response?.data?.error?.message || error.message);
+        
         if (error.response?.status === 429) {
+          console.warn('Quota Exceeded. Waiting 5s...');
           await new Promise(r => setTimeout(r, 5000));
         }
       }
     }
   }
-  throw new Error('All Gemini models failed.');
+  
+  throw new Error(`All Gemini models failed. Last error: ${lastError?.response?.data?.error?.message || lastError?.message}`);
 }

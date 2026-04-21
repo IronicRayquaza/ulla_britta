@@ -7,20 +7,32 @@ import axios from 'axios';
 export async function processEvent(event) {
     const { type, payload } = event;
     const installationId = payload.installation?.id;
-    const repository = payload.repository.full_name;
+    
+    // SAFETY: Not all events have a repository (e.g. installation, organization)
+    const repository = payload.repository?.full_name;
+    if (!repository) {
+        console.log(`ℹ️ [SKIP] Event ${type} does not have repository context.`);
+        return;
+    }
 
-    console.log(`Working on ${type} for ${repository}...`);
+    console.log(`\n👨‍💻 Working on ${type} for ${repository}...`);
 
     try {
         if (type === 'push') {
             const analysis = await analyzeCommits(payload.commits, repository);
             const pdfPath = await generatePDF(analysis);
             await sendEmail(pdfPath, repository);
+            console.log(`✅ [NARRATOR] Report sent successfully.`);
         } 
         
         else if (type === 'workflow_run' || type === 'check_run') {
             const isWorkflow = type === 'workflow_run';
             const data = isWorkflow ? payload.workflow_run : payload.check_run;
+            
+            // Only act if it's a failure
+            const isFailure = data.conclusion === 'failure' || data.status === 'completed' && data.conclusion === 'failure';
+            if (!isFailure) return;
+
             const runId = data.id;
             const branch = isWorkflow ? data.head_branch : (data.check_suite?.head_branch || 'master');
 
@@ -45,7 +57,10 @@ export async function processEvent(event) {
             }
         }
     } catch (error) {
-        console.error(`Error processing ${type}:`, error.message);
+        console.error(`❌ Error processing ${type}:`, error.message);
+        if (error.response?.data) {
+            console.error('Error Details:', JSON.stringify(error.response.data));
+        }
         throw error;
     }
 }
