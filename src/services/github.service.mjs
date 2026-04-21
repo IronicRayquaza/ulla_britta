@@ -25,19 +25,18 @@ class GitHubService {
   }
 
   /**
-   * Returns an Octokit instance for a specific installation (repository/organization).
+   * Returns an Octokit instance for a specific installation.
    */
   async getClient(installationId) {
-    if (!this.app) {
-        // Fallback to PAT for local testing if needed
+    if (this.app && installationId) {
+        // App Auth
+        return await this.app.getInstallationOctokit(installationId);
+    } else {
+        // Fallback to PAT
         return new Octokit({ auth: process.env.GITHUB_TOKEN });
     }
-    return await this.app.getInstallationOctokit(installationId);
   }
 
-  /**
-   * Verifies the webhook signature
-   */
   verifySignature(payload, signature) {
     if (!this.secret || !signature) return true;
     return this.app.webhooks.verify(payload, signature);
