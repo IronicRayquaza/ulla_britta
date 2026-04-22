@@ -1,30 +1,6 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { analyzeWithGemini } from './ai.service.mjs';
 import githubService from './github.service.mjs';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const REGISTRY_PATH = path.join(__dirname, '../../registry.json');
-
-if (!fs.existsSync(REGISTRY_PATH)) {
-  fs.writeFileSync(REGISTRY_PATH, JSON.stringify({ processedRuns: [], processedPRs: {} }));
-}
-
-function getRegistry() {
-  return JSON.parse(fs.readFileSync(REGISTRY_PATH, 'utf8'));
-}
-
-function updateRegistry(key, value) {
-  const registry = getRegistry();
-  if (Array.isArray(registry[key])) {
-    registry[key].push(value);
-  } else {
-    registry[key] = { ...registry[key], ...value };
-  }
-  fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2));
-}
+import databaseService from './database.service.mjs';
 
 async function fetchFileContent(client, owner, repo, filePath, branch) {
     try {
@@ -60,13 +36,15 @@ async function commitRemotely(client, owner, repo, fix, branch) {
 async function fetchFailedLogs(client, owner, repo, runId) {
     await new Promise(r => setTimeout(r, 6000));
     try {
-        console.log(`📖 Fetching logs for run: ${runId}`);
-        // Now guaranteed to have .rest.actions
-        const { data: jobsData } = await client.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: runId });
+        const actions = client.actions || client.rest?.actions;
+        if (!actions) throw new Error("Octokit actions plugin not found.");
+
+        const { data: jobsData } = await actions.listJobsForWorkflowRun({ owner, repo, run_id: runId });
         const failedJob = jobsData.jobs.find(j => j.conclusion === 'failure');
         if (!failedJob) return "No failure found in job list.";
         
-        const { data: logs } = await client.rest.actions.downloadJobLogsForWorkflowRun({ owner, repo, job_id: failedJob.id });
+        console.log(`📖 Fetching logs for run: ${runId}`);
+        const { data: logs } = await actions.downloadJobLogsForWorkflowRun({ owner, repo, job_id: failedJob.id });
         return logs.substring(0, 15000);
     } catch (error) {
         console.error(`❌ Log fetch error:`, error.message);
@@ -78,7 +56,11 @@ export async function performDiagnostics(installationId, repoFull, runId, checkR
   const [owner, repo] = repoFull.split('/');
   const client = await githubService.getClient(installationId);
   
-  if (runId && getRegistry().processedRuns.includes(runId)) return null;
+  // DB-BASED DEDUPLICATION
+  if (runId && await databaseService.isRunProcessed(runId)) {
+      console.log(`⏩ Skipping: Run ${runId} was already repaired.`);
+      return null;
+  }
 
   try {
     console.log(`🩺 Diagnosing failure in ${repoFull}...`);
@@ -92,7 +74,7 @@ export async function performDiagnostics(installationId, repoFull, runId, checkR
     const { data: treeData } = await client.rest.git.getTree({ owner, repo, tree_sha: branch, recursive: true });
     const repoStructure = treeData.tree.map(i => `${i.type === 'tree' ? '[DIR]' : '[FILE]'} ${i.path}`).join('\n');
     
-    console.log(`🧠 Consulting gemini-3-flash-preview for the fix...`);
+    console.log(`🧠 Consulting AI for the fix...`);
     const fileAnalysisPrompt = `Build failed. LOGS:\n${logData}\n\nSTRUCTURE:\n${repoStructure}\nIdentify faulty files (comma-separated pathways only).`;
     const suspectedFilesRaw = await analyzeWithGemini(fileAnalysisPrompt);
     const suspectedFiles = suspectedFilesRaw.split(',').map(f => f.trim().replace(/['"]/g, ''));
@@ -110,8 +92,13 @@ export async function performDiagnostics(installationId, repoFull, runId, checkR
     
     console.log(`💉 Applying fix: ${fix.explanation}`);
     const success = await commitRemotely(client, owner, repo, fix, branch);
-    if (success && runId) updateRegistry('processedRuns', runId);
-    console.log(`🏁 Surgery complete.`);
+    
+    if (success) {
+        if (runId) await databaseService.markRunProcessed(runId, repoFull);
+        await databaseService.storeFix(repoFull, branch, fix);
+        console.log(`🏁 Surgery complete and recorded in DB.`);
+    }
+
     return fix;
   } catch (error) {
     console.error(`❌ Surgery failed:`, error.message);
@@ -122,7 +109,6 @@ export async function performDiagnostics(installationId, repoFull, runId, checkR
 export async function handleConflict(installationId, prNumber, repoFull, headRef, baseRef) {
   const [owner, repo] = repoFull.split('/');
   const client = await githubService.getClient(installationId);
-  if (getRegistry().processedPRs[prNumber] === headRef) return null;
 
   try {
     const { data: files } = await client.rest.pulls.listFiles({ owner, repo, pull_number: prNumber });
@@ -134,7 +120,6 @@ export async function handleConflict(installationId, prNumber, repoFull, headRef
       await commitRemotely(client, owner, repo, { explanation: "Resolved conflict", filesToFix: [{ path: file.filename, newContent: mergedContent }] }, headRef);
     }
     await client.rest.pulls.merge({ owner, repo, pull_number: prNumber });
-    updateRegistry('processedPRs', { [prNumber]: headRef });
     return true;
   } catch (error) {
     return false;
