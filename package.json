@@ -27,6 +27,6 @@
     "ioredis": "^5.10.1",
     "nodemailer": "^8.0.5",
     "pdfkit": "^0.18.0",
-    "resend": "^6.12.0"
+    "resend": "^6.12.2"
   }
 }
