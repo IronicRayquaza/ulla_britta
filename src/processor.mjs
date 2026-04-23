@@ -2,6 +2,7 @@ import { analyzeCommits } from './services/ai.service.mjs';
 import { generatePDF } from './services/pdf.service.mjs';
 import { sendEmail } from './services/email.service.mjs';
 import { performDiagnostics, handleConflict } from './services/healing.service.mjs';
+import { generateReport } from './services/report.service.mjs';
 import databaseService from './services/database.service.mjs';
 import axios from 'axios';
 
@@ -16,43 +17,46 @@ export async function processEvent(event) {
 
     try {
         if (type === 'push') {
-            console.log(`\n👨‍💻 Processing push for ${repository}...`);
-            const analysis = await analyzeCommits(payload.commits, repository);
+            console.log(`\n👨‍💻 Analyzing push for ${repository}...`);
+            const author = payload.pusher?.name || 'Unknown';
+            const branch = payload.ref?.replace('refs/heads/', '') || 'main';
             
-            // COMPACT STORAGE: Save to DB as JSON
-            await databaseService.storeNarration(repository, analysis);
+            // 1. Get Structured AI Analysis
+            const analysisData = await analyzeCommits(payload.commits, repository, branch, author);
             
-            const pdfPath = await generatePDF(analysis);
-            await sendEmail(pdfPath, repository);
+            // 2. Generate Professional Report
+            const markdownReport = generateReport(analysisData);
+            
+            // 3. Store in DB (Compact)
+            await databaseService.storeNarration(repository, {
+                ...analysisData,
+                report_markdown: markdownReport
+            });
+            
+            // 4. Send Email (using markdown in body)
+            await sendEmail(markdownReport, repository);
+            console.log(`✅ Narration complete for ${repository}`);
         } 
         
         else if (type === 'workflow_run' || type === 'check_run') {
             const isWorkflow = type === 'workflow_run';
             const data = isWorkflow ? payload.workflow_run : payload.check_run;
             
-            const status = data.status;
-            const conclusion = data.conclusion;
+            if (data.status !== 'completed' || data.conclusion !== 'failure') return;
 
-            console.log(`\n⚙️  Event [${type}] for ${repository} | Status: ${status} | Conclusion: ${conclusion}`);
-
-            // We ONLY act if it is COMPLETED and FAILED
-            const isFinished = status === 'completed';
-            const isFailure = conclusion === 'failure';
-
-            if (!isFinished) return;
-            if (!isFailure) return;
-
-            console.log(`🚨 Failure detected! Starting autonomous repair...`);
+            console.log(`🚨 Failure detected in ${repository}! Starting autonomous repair...`);
             
-            let runId = isWorkflow ? data.id : null;
-            if (type === 'check_run' && data.check_suite?.workflow_run_id) {
-                runId = data.check_suite.workflow_run_id;
-            }
-
+            let runId = isWorkflow ? data.id : (data.check_suite?.workflow_run_id);
             if (!runId) return;
 
             const branch = isWorkflow ? data.head_branch : (data.check_suite?.head_branch || 'master');
-            await performDiagnostics(installationId, repository, runId, isWorkflow ? null : data, branch);
+            
+            // Repair logic (returns fix metadata)
+            const result = await performDiagnostics(installationId, repository, runId, isWorkflow ? null : data, branch);
+            
+            if (result && result.report_markdown) {
+                await sendEmail(result.report_markdown, repository);
+            }
         }
 
         else if (type === 'pull_request') {
