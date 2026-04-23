@@ -10,7 +10,7 @@ dotenv.config();
  */
 export async function sendEmail(markdown, repository) {
     const resend = new Resend(process.env.RESEND_API_KEY);
-    const recipient = process.env.EMAIL_RECIPIENT; // Using your specific Render variable name
+    const recipient = process.env.EMAIL_RECIPIENT;
 
     if (!recipient) {
         throw new Error('EMAIL_RECIPIENT is not configured in Render environment.');
@@ -20,7 +20,8 @@ export async function sendEmail(markdown, repository) {
         console.log(`✉️ Sending Resend report to ${recipient}...`);
         
         const { data, error } = await resend.emails.send({
-            from: 'Ulla Britta <reports@ullabritta.dev>',
+            // MUST use onboarding@resend.dev for unverified free-tier domains
+            from: 'Ulla Britta <onboarding@resend.dev>', 
             to: recipient,
             subject: `🤖 Analysis Report: ${repository}`,
             text: markdown,
