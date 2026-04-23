@@ -1,27 +1,54 @@
-import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
+import dotenv from 'dotenv';
 import fs from 'fs';
-import path from 'path';
 
-export async function sendEmail(pdfPath, repoName) {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) {
-    console.warn('RESEND_API_KEY not set. Skipping email.');
-    return;
-  }
+dotenv.config();
 
-  const resend = new Resend(apiKey);
-  const pdfContent = fs.readFileSync(pdfPath);
-
-  try {
-    await resend.emails.send({
-      from: 'CodeNarrator <onboarding@resend.dev>',
-      to: process.env.EMAIL_RECIPIENT,
-      subject: `[NARRATOR] New Activity in ${repoName}`,
-      text: 'Project activity detected. See attached PDF report for AI-generated insights.',
-      attachments: [{ filename: path.basename(pdfPath), content: pdfContent }]
+/**
+ * Sends an email report.
+ * @param {string} content - Can be a file path (to PDF) or raw Markdown string.
+ * @param {string} repository - Repository name for the subject line.
+ */
+export async function sendEmail(content, repository) {
+    const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS,
+        },
     });
-    console.log('✅ Email sent successfully!');
-  } catch (error) {
-    console.error('Failed to send email:', error.message);
-  }
+
+    // Determine if content is a file path or raw text
+    const isFilePath = content.length < 500 && fs.existsSync(content);
+    
+    const mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: process.env.ALERT_EMAIL || process.env.EMAIL_USER,
+        subject: `🤖 Ulla Britta: Analysis for ${repository}`,
+    };
+
+    if (isFilePath) {
+        mailOptions.text = `Please find the analysis report attached for ${repository}.`;
+        mailOptions.attachments = [{ filename: 'analysis_report.pdf', path: content }];
+    } else {
+        // It's the new High-Fidelity Markdown report
+        mailOptions.text = content;
+        // Optionally wrap in HTML if your transporter supports it
+        mailOptions.html = `<div style="font-family: sans-serif; color: #333;">
+            <pre style="white-space: pre-wrap; font-family: inherit;">${content}</pre>
+        </div>`;
+    }
+
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log('✅ Email sent successfully!');
+        
+        // Cleanup if it was a temp file
+        if (isFilePath && content.includes('tmp')) {
+            fs.unlinkSync(content);
+        }
+    } catch (error) {
+        console.error('❌ Email failed:', error.message);
+        throw error;
+    }
 }
