@@ -15,7 +15,10 @@ class DeploymentService {
      */
     async isDeployable(client, owner, repo) {
         try {
-            const { data: tree } = await client.rest.git.getTree({ owner, repo, tree_sha: 'main', recursive: false });
+            // Check for main or master
+            const { data: tree } = await client.rest.git.getTree({ owner, repo, tree_sha: 'main', recursive: false }).catch(() => 
+                client.rest.git.getTree({ owner, repo, tree_sha: 'master', recursive: false })
+            );
             const files = tree.tree.map(f => f.path);
             
             return files.includes('package.json') || files.includes('index.html') || files.includes('next.config.js');
@@ -34,14 +37,18 @@ class DeploymentService {
         }
 
         const [owner, repo] = repoFullName.split('/');
+        const client = await githubService.getClient(installationId);
         
         try {
             console.log(`🚀 Initiating Vercel Setup for ${repoFullName}...`);
             
+            // Fetch real GitHub Repository ID (Required by Vercel)
+            const { data: repoInfo } = await client.rest.repos.get({ owner, repo });
+            const repoId = repoInfo.id;
+
             // 1. Create the Project on Vercel
             const createResponse = await axios.post('https://api.vercel.com/v9/projects', {
                 name: repo,
-                framework: null, // Auto-detect
                 gitRepository: {
                     type: 'github',
                     repo: repoFullName,
@@ -58,15 +65,15 @@ class DeploymentService {
                 project: projectId,
                 gitSource: {
                     type: 'github',
-                    ref: 'main',
-                    repoId: installationId // Use installation context
+                    ref: repoInfo.default_branch || 'main',
+                    repoId: String(repoId) // MUST BE THE REPO ID AS STRING
                 }
             }, {
                 headers: { Authorization: `Bearer ${this.vercelToken}` }
             });
 
             console.log(`✅ Vercel Project Created! URL: ${deployResponse.data.url}`);
-            return deployResponse.data.url;
+            return `https://${deployResponse.data.url}`;
         } catch (error) {
             console.error('❌ Vercel Deployment Failed:', error.response?.data || error.message);
             return null;
