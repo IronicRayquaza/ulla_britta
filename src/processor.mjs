@@ -5,7 +5,6 @@ import { generateReport } from './services/report.service.mjs';
 import databaseService from './services/database.service.mjs';
 import deploymentService from './services/deployment.service.mjs';
 import githubService from './services/github.service.mjs';
-import axios from 'axios';
 
 export async function processEvent(event) {
     const { type, payload } = event;
@@ -21,54 +20,44 @@ export async function processEvent(event) {
             const branch = payload.ref?.replace('refs/heads/', '') || 'main';
             const commitSha = payload.commits[0]?.id;
 
-            // 1. Existing Feature: Narration & Quota Protection
+            // 1. Quota Check (Cache)
+            const existingAnalysis = await databaseService.getNarration(repository, commitSha);
             let analysisData;
             let markdownReport;
-            const existingAnalysis = await databaseService.getNarration(repository, commitSha);
 
             if (existingAnalysis) {
                 analysisData = existingAnalysis.full_json;
-                markdownReport = existingAnalysis.report_markdown;
             } else {
                 analysisData = await analyzeCommits(payload.commits, repository, branch, author);
-                markdownReport = generateReport(analysisData);
-                await databaseService.storeNarration(repository, { ...analysisData, report_markdown: markdownReport }, installationId);
             }
-            await sendEmail(markdownReport, repository);
 
-            // 2. NEW FEATURE: Proactive Deployment (Extension)
+            // 2. INTERACTIVE DEPLOYMENT CHECK
             const client = await githubService.getClient(installationId);
             const { data: repoInfo } = await client.rest.repos.get({ owner: repository.split('/')[0], repo: repository.split('/')[1] });
             
-            // If it has no homepage, it likely hasn't been deployed yet
             if (!repoInfo.homepage) {
                 const deployable = await deploymentService.isDeployable(client, repoInfo.owner.login, repoInfo.name);
                 if (deployable) {
-                    console.log(`✨ Project ${repository} detected as deployable! Attempting auto-hosting...`);
-                    
-                    // Default to Vercel if token exists, fallback to GH Pages
-                    let deployUrl;
-                    if (process.env.VERCEL_TOKEN) {
-                        deployUrl = await deploymentService.deployToVercel(repository, installationId);
-                    } else {
-                        deployUrl = await deploymentService.deployToGitHubPages(installationId, repository);
-                    }
-
-                    if (deployUrl) {
-                        // Update the repo homepage automatically!
-                        await client.rest.repos.update({
-                            owner: repoInfo.owner.login,
-                            repo: repoInfo.name,
-                            homepage: deployUrl
-                        });
-                        console.log(`🌍 Deployment Successful: ${deployUrl}`);
-                    }
+                    console.log(`💡 Idea: ${repository} could be hosted. Adding suggestion to report.`);
+                    analysisData.deploymentSuggestion = {
+                        owner: repoInfo.owner.login,
+                        repo: repoInfo.name,
+                        installationId: installationId,
+                        provider: process.env.VERCEL_TOKEN ? 'Vercel' : 'GitHub Pages'
+                    };
                 }
             }
+
+            // 3. Generate and Store Report
+            markdownReport = generateReport(analysisData);
+            if (!existingAnalysis) {
+                await databaseService.storeNarration(repository, { ...analysisData, report_markdown: markdownReport }, installationId);
+            }
+            
+            await sendEmail(markdownReport, repository);
         } 
         
         else if (type === 'workflow_run' || type === 'check_run') {
-            // Existing Repair logic...
             const isWorkflow = type === 'workflow_run';
             const data = isWorkflow ? payload.workflow_run : payload.check_run;
             if (data.status !== 'completed' || data.conclusion !== 'failure') return;

@@ -1,60 +1,61 @@
 import express from 'express';
-import dotenv from 'dotenv';
+import { enqueueTask } from './queue.mjs';
 import githubService from './services/github.service.mjs';
-import queueService from './queue.mjs';
-import axios from 'axios';
+import deploymentService from './services/deployment.service.mjs';
+import { sendEmail } from './services/email.service.mjs';
+import dotenv from 'dotenv';
 
 dotenv.config();
 
-// SECRETS VALIDATION
-const REQUIRED_VARS = ['GEMINI_API_KEY', 'GITHUB_TOKEN', 'REDIS_URL'];
-REQUIRED_VARS.forEach(v => {
-  if (!process.env[v]) {
-    console.error(`❌ CRITICAL: Missing environment variable: ${v}`);
-    process.exit(1);
-  }
-});
-
 const app = express();
-const port = process.env.PORT || 3000;
-const REPO = process.env.TARGET_REPO;
-
 app.use(express.json());
 
-app.get('/health', async (req, res) => {
-  try {
-    const redisStatus = await queueService.client.ping();
-    res.status(200).json({ status: 'healthy', redis: redisStatus === 'PONG' });
-  } catch (err) {
-    res.status(503).json({ status: 'degraded', error: err.message });
-  }
-});
-
+// Main Webhook Ingestion
 app.post('/webhook', async (req, res) => {
-  const event = req.headers['x-github-event'];
-  const payload = req.body;
+    const eventType = req.headers['x-github-event'];
+    const signature = req.headers['x-hub-signature-256'];
+    const payload = req.body;
 
-  const isBot = payload.sender?.type === 'Bot' || payload.sender?.login?.includes('[bot]');
-  const isAiCommit = payload.commits?.some(c => c.message.includes('[AI-AUTO-FIX]'));
-  
-  if (isBot || isAiCommit) {
-    return res.status(200).send('Ignored');
-  }
+    if (!githubService.verifySignature(JSON.stringify(payload), signature)) {
+        return res.status(401).send('Invalid signature');
+    }
 
-  try {
-      await queueService.enqueue({
-          type: event,
-          payload: payload,
-          id: req.headers['x-github-delivery'],
-          retryCount: 0
-      });
-      res.status(202).send('Queued');
-  } catch (err) {
-      console.error('Failed to queue event:', err.message);
-      res.status(500).send('Internal Error');
-  }
+    const taskId = await enqueueTask(eventType, payload);
+    console.log(`📥 Queuing event: ${eventType} (ID: ${taskId})`);
+    res.status(202).send({ taskId });
 });
 
-app.listen(port, () => {
-    console.log(`🚀 Ingestion Tier online. Monitoring at /health`);
+// NEW: Deployment Approval Endpoint
+app.get('/approve-deployment', async (req, res) => {
+    const { repo, owner, installation_id, provider } = req.query;
+    const repoFullName = `${owner}/${repo}`;
+
+    res.send(`
+        <div style="font-family: sans-serif; text-align: center; padding: 50px;">
+            <h1>🚀 Setup Initiated!</h1>
+            <p>Ulla Britta is now setting up hosting for <b>${repoFullName}</b> via ${provider}.</p>
+            <p>You will receive a confirmation email with your live link in a moment.</p>
+        </div>
+    `);
+
+    // Run the deployment in the background
+    try {
+        let deployUrl;
+        if (provider === 'Vercel') {
+            deployUrl = await deploymentService.deployToVercel(repoFullName, installation_id);
+        } else {
+            deployUrl = await deploymentService.deployToGitHubPages(installation_id, repoFullName);
+        }
+
+        if (deployUrl) {
+            await sendEmail(`✅ Success! Your project **${repoFullName}** is now live at: ${deployUrl}`, repoFullName);
+        }
+    } catch (e) {
+        console.error('Approval Deployment Failed:', e.message);
+    }
 });
+
+app.get('/health', (req, res) => res.send({ status: 'online', time: new Date() }));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Ingestion Tier online. Monitoring at /health`));
