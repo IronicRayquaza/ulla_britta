@@ -26,19 +26,20 @@ export async function processEvent(event) {
             let markdownReport;
 
             if (existingAnalysis) {
+                console.log(`♻️  Using cached analysis for ${repository}`);
                 analysisData = existingAnalysis.full_json;
             } else {
                 analysisData = await analyzeCommits(payload.commits, repository, branch, author);
             }
 
-            // 2. INTERACTIVE DEPLOYMENT CHECK
+            // 2. INTERACTIVE DEPLOYMENT CHECK (No auto-deploy anymore)
             const client = await githubService.getClient(installationId);
             const { data: repoInfo } = await client.rest.repos.get({ owner: repository.split('/')[0], repo: repository.split('/')[1] });
             
             if (!repoInfo.homepage) {
                 const deployable = await deploymentService.isDeployable(client, repoInfo.owner.login, repoInfo.name);
                 if (deployable) {
-                    console.log(`💡 Idea: ${repository} could be hosted. Adding suggestion to report.`);
+                    console.log(`💡 Hosting Suggestion: Adding 'Deploy Now' button to report.`);
                     analysisData.deploymentSuggestion = {
                         owner: repoInfo.owner.login,
                         repo: repoInfo.name,
@@ -55,6 +56,7 @@ export async function processEvent(event) {
             }
             
             await sendEmail(markdownReport, repository);
+            console.log(`✅ Report sent. Standing by for approval.`);
         } 
         
         else if (type === 'workflow_run' || type === 'check_run') {
