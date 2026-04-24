@@ -15,29 +15,33 @@ export async function processEvent(event) {
 
     try {
         if (type === 'push') {
-            console.log(`\n👨‍💻 Analyzing push for ${repository}...`);
             const author = payload.pusher?.name || 'Unknown';
             const branch = payload.ref?.replace('refs/heads/', '') || 'main';
             const commitSha = payload.commits[0]?.id;
 
+            console.log(`\n👨‍💻 Processing push [${commitSha.substring(0,7)}] for ${repository}...`);
+
             // 1. Quota Check (Cache)
             const existingAnalysis = await databaseService.getNarration(repository, commitSha);
             let analysisData;
-            let markdownReport;
 
             if (existingAnalysis) {
-                console.log(`♻️  Using cached analysis for ${repository}`);
+                console.log(`♻️  Using cached analysis for this commit.`);
                 analysisData = existingAnalysis.full_json;
             } else {
                 analysisData = await analyzeCommits(payload.commits, repository, branch, author);
             }
 
-            // 2. INTERACTIVE DEPLOYMENT CHECK (No auto-deploy anymore)
+            // 2. DIAGNOSTIC DEPLOYMENT CHECK
             const client = await githubService.getClient(installationId);
             const { data: repoInfo } = await client.rest.repos.get({ owner: repository.split('/')[0], repo: repository.split('/')[1] });
             
+            console.log(`🧐 Deployment Check: Homepage is [${repoInfo.homepage || 'NOT SET'}]`);
+            
             if (!repoInfo.homepage) {
                 const deployable = await deploymentService.isDeployable(client, repoInfo.owner.login, repoInfo.name);
+                console.log(`🧐 Deployment Check: Is project deployable? [${deployable}]`);
+                
                 if (deployable) {
                     console.log(`💡 Hosting Suggestion: Adding 'Deploy Now' button to report.`);
                     analysisData.deploymentSuggestion = {
@@ -47,16 +51,17 @@ export async function processEvent(event) {
                         provider: process.env.VERCEL_TOKEN ? 'Vercel' : 'GitHub Pages'
                     };
                 }
+            } else {
+                console.log(`⏩ Skipping hosting suggestion (Homepage already exists).`);
             }
 
             // 3. Generate and Store Report
-            markdownReport = generateReport(analysisData);
+            const markdownReport = generateReport(analysisData);
             if (!existingAnalysis) {
                 await databaseService.storeNarration(repository, { ...analysisData, report_markdown: markdownReport }, installationId);
             }
             
             await sendEmail(markdownReport, repository);
-            console.log(`✅ Report sent. Standing by for approval.`);
         } 
         
         else if (type === 'workflow_run' || type === 'check_run') {
