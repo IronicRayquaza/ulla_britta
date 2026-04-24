@@ -5,7 +5,11 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const REQUIRED = ['GEMINI_API_KEY', 'REDIS_URL'];
-REQUIRED.forEach(v => { if (!process.env[v]) throw new Error(`Missing ${v}`) });
+REQUIRED.forEach(v => { if (!process.env[v]) {
+    // REDIS_URL might be provided as REDIS_INTERNAL_URL on Render
+    if (v === 'REDIS_URL' && process.env.REDIS_INTERNAL_URL) return;
+    throw new Error(`Missing ${v}`);
+}});
 
 console.log('🤖 Ulla Britta Worker is standing by...');
 
@@ -29,7 +33,7 @@ async function startWorker() {
             const event = await queueService.dequeue();
             if (event) {
                 currentTask = event;
-                console.log(`\n🧵 Task: ${event.type} (${event.id}) | Attempt: ${event.retryCount + 1}`);
+                console.log(`\n🧵 Task: ${event.type} (${event.id}) | Attempt: ${(event.retryCount || 0) + 1}`);
                 await processEvent(event);
                 console.log(`✅ Success: ${event.id}`);
                 currentTask = null;
@@ -49,7 +53,8 @@ async function handleFailure(event, error) {
     event.retryCount = (event.retryCount || 0) + 1;
     if (event.retryCount < 3) {
         console.warn(`🔄 Retrying task ${event.id}...`);
-        await queueService.enqueue(event);
+        // Use the raw client to re-queue the exact task object for retry
+        await queueService.client.lpush('ulla_britta_events', JSON.stringify(event));
     } else {
         console.error(`💀 Task ${event.id} FAILED after 3 attempts.`);
         await queueService.client.lpush('ulla_britta_failed', JSON.stringify({
