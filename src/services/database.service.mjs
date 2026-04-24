@@ -12,16 +12,13 @@ class DatabaseService {
             this.client = createClient(SUPABASE_URL, SUPABASE_KEY);
             console.log('✅ Supabase Connection Initialized.');
         } else {
-            console.warn('⚠️ SUPABASE_URL or SERVICE_KEY missing. Running in LOCAL-ONLY mode.');
+            console.warn('⚠️ SUPABASE_URL or SERVICE_KEY missing.');
         }
     }
 
-    /**
-     * Deduplication: Check if a run ID has been processed.
-     */
     async isRunProcessed(runId) {
         if (!this.client) return false;
-        const { data, error } = await this.client
+        const { data } = await this.client
             .from('processed_runs')
             .select('run_id')
             .eq('run_id', runId)
@@ -29,41 +26,51 @@ class DatabaseService {
         return !!data;
     }
 
-    /**
-     * Mark a run as processed.
-     */
     async markRunProcessed(runId, repoFullName) {
         if (!this.client) return;
         await this.client.from('processed_runs').insert({ run_id: runId, repo_name: repoFullName });
     }
 
     /**
-     * Compact storage for Auto-Fixes.
+     * Store Fix with Installation ID for Dashboard visibility.
      */
-    async storeFix(repoName, branch, fixData) {
+    async storeFix(repoName, branch, fixData, installationId) {
         if (!this.client) return;
-        const { error } = await this.client.from('auto_fixes').insert({
+        await this.client.from('auto_fixes').insert({
             repo_name: repoName,
             branch: branch,
             explanation: fixData.explanation,
-            files_changed: fixData.filesToFix.map(f => f.path),
-            full_json: fixData // Storing the full object for future audit
+            files_changed: fixData.filesToFix?.map(f => f.path) || [],
+            full_json: fixData,
+            installation_id: installationId // LINKED TO FRONTEND
         });
-        if (error) console.error('Database Error (Fix):', error.message);
     }
 
     /**
-     * Compact storage for Narrations (Push Analysis).
+     * Store Narration with Installation ID.
      */
-    async storeNarration(repoName, analysisData) {
+    async storeNarration(repoName, analysisData, installationId) {
         if (!this.client) return;
-        const { error } = await this.client.from('narrations').insert({
+        await this.client.from('narrations').insert({
             repo_name: repoName,
+            commit_sha: analysisData.commitSha,
             summary: analysisData.summary,
-            commit_count: analysisData.commitCount,
-            full_json: analysisData
+            report_markdown: analysisData.report_markdown,
+            full_json: analysisData,
+            installation_id: installationId // LINKED TO FRONTEND
         });
-        if (error) console.error('Database Error (Narration):', error.message);
+    }
+
+    // New: Fetch cached narration
+    async getNarration(repoName, commitSha) {
+        if (!this.client) return null;
+        const { data } = await this.client
+            .from('narrations')
+            .select('*')
+            .eq('repo_name', repoName)
+            .eq('commit_sha', commitSha)
+            .single();
+        return data;
     }
 }
 

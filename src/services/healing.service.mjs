@@ -75,7 +75,6 @@ export async function performDiagnostics(installationId, repoFull, runId, checkR
     const rawFix = await analyzeWithGemini(prompt);
     const result = JSON.parse(rawFix.replace(/```json|```/g, '').trim());
     
-    console.log(`💉 Applying fix for ${repoFull}: ${result.explanation}`);
     const success = await commitRemotely(client, owner, repo, result, branch);
     
     if (success) {
@@ -88,7 +87,10 @@ export async function performDiagnostics(installationId, repoFull, runId, checkR
         };
         const markdown = generateReport(analysisData);
         if (runId) await databaseService.markRunProcessed(runId, repoFull);
-        await databaseService.storeFix(repoFull, branch, { ...result, report_markdown: markdown });
+        
+        // PASS INSTALLATION ID TO DB
+        await databaseService.storeFix(repoFull, branch, { ...result, report_markdown: markdown }, installationId);
+        
         return { ...result, report_markdown: markdown };
     }
   } catch (error) {
