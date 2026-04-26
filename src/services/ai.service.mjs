@@ -81,7 +81,10 @@ export async function analyzeWithGemini(prompt) {
   if (!apiKey) throw new Error('GEMINI_API_KEY is not configured.');
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+  const model = genAI.getGenerativeModel({ 
+    model: 'gemini-3-flash-preview',
+    systemInstruction: "You are Ulla Britta, an elite SRE Agent. You must always use FULL, ABSOLUTE repository paths for all files (e.g., 'folder/subfolder/file.js'). Never assume files are at the root. Your analysis must be surgical, non-technical for executive summaries, and strictly grounded in the provided project structure."
+  });
   
   try {
     const result = await model.generateContent(prompt);
