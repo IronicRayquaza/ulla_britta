@@ -2,7 +2,9 @@ import express from 'express';
 import { enqueueTask } from './queue.mjs';
 import githubService from './services/github.service.mjs';
 import deploymentService from './services/deployment.service.mjs';
+import databaseService from './services/database.service.mjs';
 import { sendEmail } from './services/email.service.mjs';
+import logger from './services/logger.service.mjs';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -15,13 +17,21 @@ app.post('/webhook', async (req, res) => {
     const eventType = req.headers['x-github-event'];
     const signature = req.headers['x-hub-signature-256'];
     const payload = req.body;
+    const repository = payload.repository?.full_name;
 
     if (!githubService.verifySignature(JSON.stringify(payload), signature)) {
         return res.status(401).send('Invalid signature');
     }
 
+    // Attempt to tag the log to a user immediately
+    if (repository) {
+        const owner = repository.split('/')[0];
+        const userId = await databaseService.getUserIdByGithubUsername(owner);
+        logger.setContext(userId, repository, 'receiver');
+        await logger.info(`📥 Webhook Received: ${eventType}. Enqueuing task...`);
+    }
+
     const taskId = await enqueueTask(eventType, payload);
-    console.log(`📥 Queuing event: ${eventType} (ID: ${taskId})`);
     res.status(202).send({ taskId });
 });
 
@@ -30,7 +40,10 @@ app.get('/approve-deployment', async (req, res) => {
     const { repo, owner, installation_id, provider } = req.query;
     const repoFullName = `${owner}/${repo}`;
 
-    // Immediate Response to User
+    const userId = await databaseService.getUserIdByGithubUsername(owner);
+    logger.setContext(userId, repoFullName, 'deployment-engine');
+    await logger.info(`🛰️ Approval Signal Received for ${repoFullName}. Triggering ${provider}...`);
+
     res.send(`
         <div style="font-family: sans-serif; text-align: center; padding: 50px; background: #0d1117; color: #c9d1d9; height: 100vh;">
             <h1 style="color: #58a6ff;">🚀 Setup Initiated!</h1>
@@ -39,10 +52,7 @@ app.get('/approve-deployment', async (req, res) => {
         </div>
     `);
 
-    // Run the deployment in the background immediately
     try {
-        console.log(`📡 Approval Signal Received for ${repoFullName}. Triggering ${provider}...`);
-        
         let deployUrl;
         if (provider === 'Vercel') {
             deployUrl = await deploymentService.deployToVercel(repoFullName, installation_id);
@@ -51,10 +61,13 @@ app.get('/approve-deployment', async (req, res) => {
         }
 
         if (deployUrl) {
+            await logger.success(`✅ Deployment Successful! Repository is live.`);
             await sendEmail(`✅ Success! Your project **${repoFullName}** is now live at: ${deployUrl}`, repoFullName);
+        } else {
+            await logger.error(`❌ Deployment failed. Check server logs for details.`);
         }
     } catch (e) {
-        console.error('Approval Deployment Failed:', e.message);
+        await logger.error(`❌ Approval Error: ${e.message}`);
     }
 });
 

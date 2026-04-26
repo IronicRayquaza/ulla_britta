@@ -72,6 +72,24 @@ class DatabaseService {
             .single();
         return data;
     }
+
+    /**
+     * Look up the dashboard user_id associated with a GitHub username/owner.
+     */
+    async getUserIdByGithubUsername(username) {
+        if (!this.client) return null;
+        const { data, error } = await this.client
+            .from('profiles')
+            .select('user_id')
+            .eq('github_username', username)
+            .single();
+        
+        if (error || !data) {
+            console.warn(`⚠️ No user profile found for GitHub user: ${username}`);
+            return null;
+        }
+        return data.user_id;
+    }
 }
 
 export default new DatabaseService();
