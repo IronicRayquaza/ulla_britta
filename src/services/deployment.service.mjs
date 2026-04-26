@@ -15,13 +15,14 @@ class DeploymentService {
      */
     async isDeployable(client, owner, repo) {
         try {
-            // Check for main or master
-            const { data: tree } = await client.rest.git.getTree({ owner, repo, tree_sha: 'main', recursive: false }).catch(() => 
-                client.rest.git.getTree({ owner, repo, tree_sha: 'master', recursive: false })
+            // Recursive scan to find projects in subfolders
+            const { data: tree } = await client.rest.git.getTree({ owner, repo, tree_sha: 'main', recursive: true }).catch(() => 
+                client.rest.git.getTree({ owner, repo, tree_sha: 'master', recursive: true })
             );
             const files = tree.tree.map(f => f.path);
             
-            return files.includes('package.json') || files.includes('index.html') || files.includes('next.config.js');
+            // Check if any key file exists anywhere in the repo
+            return files.some(f => f.endsWith('package.json') || f.endsWith('index.html') || f.endsWith('next.config.js'));
         } catch (e) {
             return false;
         }
