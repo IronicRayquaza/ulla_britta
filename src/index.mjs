@@ -5,12 +5,48 @@ import deploymentService from './services/deployment.service.mjs';
 import databaseService from './services/database.service.mjs';
 import { sendEmail } from './services/email.service.mjs';
 import logger from './services/logger.service.mjs';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
+import vercelService from './services/vercel.service.mjs';
 
 dotenv.config();
 
 const app = express();
 app.use(express.json());
+
+// Vercel Build Failure Webhook
+app.post('/webhooks/vercel', async (req, res) => {
+    const signature = req.headers['x-vercel-signature'];
+    const VERCEL_SECRET = process.env.VERCEL_WEBHOOK_SECRET;
+
+    if (signature && VERCEL_SECRET) {
+        const expectedSignature = crypto
+            .createHmac('sha256', VERCEL_SECRET)
+            .update(JSON.stringify(req.body))
+            .digest('hex');
+        
+        if (signature !== expectedSignature) {
+            return res.status(401).send('Invalid Vercel signature');
+        }
+    }
+
+    const event = req.body;
+    if (!['deployment.failed', 'deployment.error'].includes(event.type)) {
+        return res.status(200).send('Ignored');
+    }
+
+    const payload = {
+        type: 'vercel_failure',
+        deployment_id: event.payload.deployment.id,
+        project_name: event.payload.project.name,
+        repository: event.payload.project.link?.repo,
+        branch: event.payload.deployment.meta?.gitBranch,
+        commit: event.payload.deployment.meta?.gitCommitSha
+    };
+
+    await enqueueTask('vercel_failure', payload);
+    res.status(202).send({ message: 'Vercel failure enqueued' });
+});
 
 // Main Webhook Ingestion
 app.post('/webhook', async (req, res) => {
@@ -32,6 +68,25 @@ app.post('/webhook', async (req, res) => {
     }
 
     const taskId = await enqueueTask(eventType, payload);
+
+    // Special Handling for Issue-to-Code Phase 2
+    if (eventType === 'issues' && payload.action === 'labeled') {
+        const label = payload.label.name;
+        const ullaLabels = ['ulla-build', 'ulla-fix', 'ulla-enhance', 'ulla-refactor'];
+        
+        if (ullaLabels.includes(label)) {
+            await enqueueTask('feature_request', {
+                issue_number: payload.issue.number,
+                issue_title: payload.issue.title,
+                issue_body: payload.issue.body,
+                repository: payload.repository.full_name,
+                owner: payload.repository.owner.login,
+                repo: payload.repository.name,
+                branch: payload.repository.default_branch || 'main'
+            });
+        }
+    }
+
     res.status(202).send({ taskId });
 });
 

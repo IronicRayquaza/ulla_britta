@@ -29,6 +29,45 @@ class GitHubService {
   }
 
   /**
+   * Helper to create a new branch from a base branch.
+   */
+  async createBranch(client, owner, repo, branchName, baseBranch = 'main') {
+    const { data: ref } = await client.rest.git.getRef({ owner, repo, ref: `heads/${baseBranch}` });
+    return await client.rest.git.createRef({ owner, repo, ref: `refs/heads/${branchName}`, sha: ref.object.sha });
+  }
+
+  /**
+   * Helper to create or update file content.
+   */
+  async createOrUpdateFile(client, owner, repo, path, message, content, branch, sha = null) {
+      if (!sha) {
+          try {
+              const { data } = await client.rest.repos.getContent({ owner, repo, path, ref: branch });
+              sha = data.sha;
+          } catch (e) { sha = null; }
+      }
+      return await client.rest.repos.createOrUpdateFileContents({
+          owner, repo, path, message, branch, sha,
+          content: Buffer.from(content).toString('base64')
+      });
+  }
+
+  /**
+   * Helper to open a Pull Request.
+   */
+  async createPullRequest(client, owner, repo, { title, body, head, base }) {
+      const { data: pr } = await client.rest.pulls.create({ owner, repo, title, body, head, base });
+      return pr;
+  }
+
+  /**
+   * Helper to add a comment to an issue or PR.
+   */
+  async addComment(client, owner, repo, issueNumber, body) {
+      return await client.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body });
+  }
+
+  /**
    * Returns a full-featured Octokit instance (REST + Actions + Apps).
    */
   async getClient(installationId) {

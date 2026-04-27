@@ -21,10 +21,12 @@
     "@octokit/rest": "^21.1.1",
     "@octokit/webhooks": "^14.2.0",
     "@supabase/supabase-js": "^2.104.0",
-    "axios": "^1.15.0",
+    "axios": "^1.15.2",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "glob": "^13.0.6",
     "ioredis": "^5.10.1",
+    "node-fetch": "^3.3.2",
     "nodemailer": "^8.0.5",
     "pdfkit": "^0.18.0",
     "resend": "^6.12.2"

@@ -6,6 +6,10 @@ import databaseService from './services/database.service.mjs';
 import deploymentService from './services/deployment.service.mjs';
 import githubService from './services/github.service.mjs';
 import logger from './services/logger.service.mjs';
+import vercelService from './services/vercel.service.mjs';
+import repoAnalyzer from './services/repo-analyzer.service.mjs';
+import codeGenerator from './services/code-generator.service.mjs';
+import path from 'path';
 
 export async function processEvent(event) {
     const { type, payload } = event;
@@ -67,8 +71,85 @@ export async function processEvent(event) {
             
             await sendEmail(markdownReport, repository);
             await logger.success(`Final report sent via email. 🏁`);
-        } 
-        
+        } else if (type === 'vercel_failure') {
+            await logger.warn(`🔥 Vercel Build Failure detected for ${payload.project_name}! Fetching logs...`);
+            
+            const logs = await vercelService.getDeploymentLogs(payload.deployment_id);
+            const branch = payload.branch || 'main';
+
+            // Gather context from GitHub (package.json and next.config.js are key for Vercel)
+            const client = await githubService.getClient(installationId);
+            const getFile = async (path) => {
+                try {
+                    const { data } = await client.rest.repos.getContent({ owner, repo: repository.split('/')[1], path, ref: branch });
+                    return Buffer.from(data.content, 'base64').toString();
+                } catch (e) { return null; }
+            };
+
+            const packageJson = await getFile('package.json');
+            const nextConfig = await getFile('next.config.js');
+            const context = `[FILES]\npackage.json: ${packageJson}\nnext.config.js: ${nextConfig}`;
+
+            // We reuse the healing service logic but with Vercel logs as input
+            const result = await performDiagnostics(installationId, repository, null, null, branch, logs, context);
+
+            if (result && result.report_markdown) {
+                await sendEmail(result.report_markdown, repository);
+                await logger.success(`Vercel auto-fix applied! Triggering redeploy...`);
+                await vercelService.triggerRedeploy(payload.deployment_id);
+            }
+        }
+
+        else if (type === 'feature_request') {
+            await logger.info(`🏗️  Feature Request Received for #${payload.issue_number}. Starting construction...`);
+            
+            const client = await githubService.getClient(installationId);
+            const repoPath = await repoAnalyzer.cloneRepo(payload.owner, payload.repo, payload.branch);
+            
+            if (!repoPath) throw new Error('Could not clone repository for analysis.');
+
+            const stack = await repoAnalyzer.detectTechStack(repoPath);
+            const structure = await repoAnalyzer.getStructure(repoPath);
+
+            await logger.info(`📊 Repository analyzed. Generating implementation plan...`);
+            const plan = await codeGenerator.generatePlan(payload, stack, structure);
+
+            if (plan.confidence < 70) {
+                await githubService.addComment(client, payload.owner, payload.repo, payload.issue_number, 
+                    `🤖 **Ulla Britta here!** I've analyzed this request but my confidence (${plan.confidence}%) is below the automation threshold. I'll leave this for human review.`);
+                await logger.warn(`Confidence too low (${plan.confidence}%). Aborting auto-build.`);
+                return;
+            }
+
+            const branchName = `ulla/feature-${payload.issue_number}`;
+            await githubService.createBranch(client, payload.owner, payload.repo, branchName, payload.branch);
+
+            // 1. Create New Files
+            for (const f of plan.filesToCreate) {
+                const code = await codeGenerator.generateFile(f, stack, structure);
+                await githubService.createOrUpdateFile(client, payload.owner, payload.repo, f.path, `[ULLA] Create ${f.path}`, code, branchName);
+            }
+
+            // 2. Modify Existing Files
+            for (const f of plan.filesToModify) {
+                const original = await repoAnalyzer.getFileContent(path.join(repoPath, f.path)).catch(() => "");
+                const modified = await codeGenerator.generateFile(f, stack, original);
+                await githubService.createOrUpdateFile(client, payload.owner, payload.repo, f.path, `[ULLA] Update ${f.path}`, modified, branchName);
+            }
+
+            const pr = await githubService.createPullRequest(client, payload.owner, payload.repo, {
+                title: `🤖 Ulla Build: ${payload.issue_title}`,
+                body: `## Autonomous Implementation by Ulla Britta\n\nCloses #${payload.issue_number}\n\n**Approach:** ${plan.approach}\n\n**Confidence:** ${plan.confidence}%`,
+                head: branchName,
+                base: payload.branch
+            });
+
+            await githubService.addComment(client, payload.owner, payload.repo, payload.issue_number, `✅ I've built this feature! See Pull Request #${pr.number} 🚀`);
+            await logger.success(`Feature Build Complete! Opened PR #${pr.number}`);
+            
+            await repoAnalyzer.cleanup(repoPath);
+        }
+
         else if (type === 'workflow_run' || type === 'check_run') {
             const isWorkflow = type === 'workflow_run';
             const data = isWorkflow ? payload.workflow_run : payload.check_run;

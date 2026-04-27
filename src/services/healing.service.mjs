@@ -48,20 +48,21 @@ async function fetchFailedLogs(client, owner, repo, runId) {
     }
 }
 
-export async function performDiagnostics(installationId, repoFull, runId, checkRun = null, branch = 'master') {
+export async function performDiagnostics(installationId, repoFull, runId, checkRun = null, branch = 'master', manualLog = null, extraContext = null) {
   const [owner, repo] = repoFull.split('/');
   const client = await githubService.getClient(installationId);
   
   if (runId && await databaseService.isRunProcessed(runId)) return null;
 
   try {
-    let logData = (runId) ? await fetchFailedLogs(client, owner, repo, runId) : "External check data";
+    let logData = manualLog || ((runId) ? await fetchFailedLogs(client, owner, repo, runId) : "External check data");
     if (!logData || logData.length < 50) return null;
 
     const { data: treeData } = await client.rest.git.getTree({ owner, repo, tree_sha: branch, recursive: true });
     const repoStructure = treeData.tree.map(i => `${i.type === 'tree' ? '[DIR]' : '[FILE]'} ${i.path}`).join('\n');
     
-    const fileAnalysisPrompt = `Build failed. LOGS:\n${logData}\n\nSTRUCTURE:\n${repoStructure}\nIdentify faulty files (comma-separated pathways only).`;
+    let fileAnalysisPrompt = `Build failed. LOGS:\n${logData}\n\nSTRUCTURE:\n${repoStructure}\nIdentify faulty files (comma-separated pathways only).`;
+    if (extraContext) fileAnalysisPrompt += `\n\nEXTRA CONTEXT:\n${extraContext}`;
     const suspectedFilesRaw = await analyzeWithGemini(fileAnalysisPrompt);
     const suspectedFiles = suspectedFilesRaw.split(',').map(f => f.trim().replace(/['"]/g, ''));
 
