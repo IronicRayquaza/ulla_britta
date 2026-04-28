@@ -90,6 +90,24 @@ class DatabaseService {
         }
         return data.user_id;
     }
+
+    /**
+     * Look up the GitHub Installation ID for a repository.
+     * We scan narrations/fixes as they contain this mapping.
+     */
+    async getInstallationIdByRepo(repoName) {
+        if (!this.client) return null;
+        
+        // Try narrations first
+        const { data } = await this.client
+            .from('narrations')
+            .select('installation_id')
+            .eq('repo_name', repoName)
+            .limit(1)
+            .single();
+        
+        return data?.installation_id || null;
+    }
 }
 
 export default new DatabaseService();

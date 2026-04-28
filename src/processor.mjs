@@ -13,8 +13,13 @@ import path from 'path';
 
 export async function processEvent(event) {
     const { type, payload } = event;
-    const installationId = payload.installation?.id || payload.installationId || (payload.installation && typeof payload.installation === 'number' ? payload.installation : null);
+    let installationId = payload.installation?.id || payload.installationId || (payload.installation && typeof payload.installation === 'number' ? payload.installation : null);
     const repository = payload.repository?.full_name || payload.repository;
+
+    // Vercel Fallback: Lookup installation ID if missing
+    if (!installationId && repository && type === 'vercel_failure') {
+        installationId = await databaseService.getInstallationIdByRepo(repository);
+    }
 
     if (!repository || !installationId) {
         console.log(`⚠️  Skipping task ${type} (${event.id}): Missing repository (${repository}) or installationId (${installationId})`);
