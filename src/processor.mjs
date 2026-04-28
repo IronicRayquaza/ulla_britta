@@ -13,10 +13,13 @@ import path from 'path';
 
 export async function processEvent(event) {
     const { type, payload } = event;
-    const installationId = payload.installation?.id;
-    const repository = payload.repository?.full_name;
+    const installationId = payload.installation?.id || payload.installationId || (payload.installation && typeof payload.installation === 'number' ? payload.installation : null);
+    const repository = payload.repository?.full_name || payload.repository;
 
-    if (!repository || !installationId) return;
+    if (!repository || !installationId) {
+        console.log(`⚠️  Skipping task ${type} (${event.id}): Missing repository (${repository}) or installationId (${installationId})`);
+        return;
+    }
 
     try {
         // 1. Context Resolution (Who is this for?)
