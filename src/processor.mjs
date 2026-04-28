@@ -21,8 +21,13 @@ export async function processEvent(event) {
     try {
         // 1. Context Resolution (Who is this for?)
         const owner = repository.split('/')[0];
-        const userId = await databaseService.getUserIdByGithubUsername(owner);
+        let userId = await databaseService.getUserIdByGithubUsername(owner);
         
+        if (!userId) {
+            userId = '00000000-0000-0000-0000-000000000000'; // Global System ID fallback
+            await logger.warn(`Identity Fallback: No profile for ${owner}. Running in anonymous mode.`);
+        }
+
         logger.setContext(userId, repository, 'worker');
         await logger.info(`Received ${type} event. Preparing brain...`);
 
@@ -104,7 +109,10 @@ export async function processEvent(event) {
             await logger.info(`🏗️  Feature Request Received for #${payload.issue_number}. Starting construction...`);
             
             const client = await githubService.getClient(installationId);
-            const repoPath = await repoAnalyzer.cloneRepo(payload.owner, payload.repo, payload.branch);
+            
+            // Fetch installation token to support PRIVATE repos
+            const { data: tokenData } = await client.rest.apps.createInstallationAccessToken({ installation_id: installationId });
+            const repoPath = await repoAnalyzer.cloneRepo(payload.owner, payload.repo, payload.branch, tokenData.token);
             
             if (!repoPath) throw new Error('Could not clone repository for analysis.');
 

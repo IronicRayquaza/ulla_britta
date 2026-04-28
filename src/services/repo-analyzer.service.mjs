@@ -16,9 +16,9 @@ class RepositoryAnalyzer {
     }
 
     /**
-     * Shallow clone for rapid analysis.
+     * Shallow clone for rapid analysis (Supports Private Repos).
      */
-    async cloneRepo(owner, repo, branch = 'main') {
+    async cloneRepo(owner, repo, branch = 'main', token = null) {
         const repoPath = path.join(this.baseTmpPath, `${owner}_${repo}`);
         await execAsync(`mkdir -p ${path.dirname(repoPath)}`);
         
@@ -26,8 +26,13 @@ class RepositoryAnalyzer {
         await execAsync(`rm -rf ${repoPath}`).catch(() => {});
 
         try {
+            // If we have a token, inject it for private repo access
+            const remoteUrl = token 
+                ? `https://x-access-token:${token}@github.com/${owner}/${repo}.git`
+                : `https://github.com/${owner}/${repo}.git`;
+
             await execAsync(
-                `git clone --depth 1 --branch ${branch} https://github.com/${owner}/${repo}.git ${repoPath}`,
+                `git clone --depth 1 --branch ${branch} ${remoteUrl} ${repoPath}`,
                 { timeout: 30000 }
             );
             return repoPath;

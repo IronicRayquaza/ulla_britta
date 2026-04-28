@@ -82,7 +82,8 @@ app.post('/webhook', async (req, res) => {
                 repository: payload.repository.full_name,
                 owner: payload.repository.owner.login,
                 repo: payload.repository.name,
-                branch: payload.repository.default_branch || 'main'
+                branch: payload.repository.default_branch || 'main',
+                installation: payload.installation // CRITICAL FIX: Pass the credentials
             });
         }
     }
