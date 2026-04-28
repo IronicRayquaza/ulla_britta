@@ -77,6 +77,13 @@ class RepositoryAnalyzer {
         }
     }
 
+    /**
+     * Read a specific file from the cloned repo.
+     */
+    async getFileContent(filePath) {
+        return await fs.readFile(filePath, 'utf8');
+    }
+
     async cleanup(repoPath) {
         await execAsync(`rm -rf ${repoPath}`).catch(() => {});
     }

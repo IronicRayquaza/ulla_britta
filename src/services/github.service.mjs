@@ -32,8 +32,13 @@ class GitHubService {
    * Helper to create a new branch from a base branch.
    */
   async createBranch(client, owner, repo, branchName, baseBranch = 'main') {
-    const { data: ref } = await client.rest.git.getRef({ owner, repo, ref: `heads/${baseBranch}` });
-    return await client.rest.git.createRef({ owner, repo, ref: `refs/heads/${branchName}`, sha: ref.object.sha });
+    try {
+        const { data: ref } = await client.rest.git.getRef({ owner, repo, ref: `heads/${baseBranch}` });
+        return await client.rest.git.createRef({ owner, repo, ref: `refs/heads/${branchName}`, sha: ref.object.sha });
+    } catch (e) {
+        if (e.message.includes('already exists')) return true; // Fail gracefully
+        throw e;
+    }
   }
 
   /**
