@@ -17,9 +17,15 @@ app.use(express.json());
 
 // Vercel OAuth Callback
 app.get('/vercel/callback', async (req, res) => {
-    const { code, state } = req.query; // 'state' usually contains our internal userId
+    const { code, state } = req.query;
     
-    if (!code) return res.status(400).send('Missing code');
+    console.log(`📡 Vercel Callback Received!`);
+    console.log(`Query Params:`, JSON.stringify(req.query, null, 2));
+
+    if (!code) {
+        console.warn(`❌ Auth Failed: No code received from Vercel. Query was:`, req.query);
+        return res.status(400).send('Missing code. Check Render logs for details.');
+    }
 
     try {
         // For testing, we might need a way to pass the userId through 'state'
