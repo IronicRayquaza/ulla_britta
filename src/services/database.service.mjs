@@ -96,26 +96,28 @@ class DatabaseService {
      * We scan narrations/fixes as they contain this mapping.
      */
     /**
-     * Store Vercel Installation tokens linked to a user.
+     * Store Vercel Integration data (SaaS Mode).
      */
-    async storeVercelInstallation(userId, data) {
+    async storeVercelIntegration(userId, data) {
         if (!this.client) return;
-        await this.client.from('vercel_installations').upsert({
+        await this.client.from('vercel_integrations').upsert({
             user_id: userId,
             access_token: data.access_token,
-            team_id: data.team_id,
-            vercel_user_id: data.vercel_user_id,
-            updated_at: new Date().toISOString()
+            configuration_id: data.configuration_id,
+            team_id: data.team_id || null,
+            user_vercel_id: data.vercel_user_id,
+            status: 'active',
+            installed_at: new Date().toISOString()
         });
     }
 
     /**
-     * Retrieve Vercel token for a user.
+     * Retrieve Vercel token by user_id.
      */
     async getVercelToken(userId) {
         if (!this.client) return null;
         const { data } = await this.client
-            .from('vercel_installations')
+            .from('vercel_integrations')
             .select('access_token')
             .eq('user_id', userId)
             .single();

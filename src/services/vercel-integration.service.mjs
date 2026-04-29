@@ -15,7 +15,7 @@ class VercelIntegrationService {
     /**
      * Exchange the temporary 'code' for a permanent access token.
      */
-    async exchangeCode(code, userId) {
+    async exchangeCode(code, userId, configurationId, teamId) {
         try {
             const response = await axios.post('https://api.vercel.com/v2/oauth/access_token', 
                 new URLSearchParams({
@@ -27,12 +27,13 @@ class VercelIntegrationService {
                 { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
             );
 
-            const { access_token, team_id, user_id: vercel_user_id } = response.data;
+            const { access_token, user_id: vercel_user_id } = response.data;
 
-            // Store in Supabase
-            await databaseService.storeVercelInstallation(userId, {
+            // Store in Supabase using the new SaaS schema
+            await databaseService.storeVercelIntegration(userId, {
                 access_token,
-                team_id,
+                configuration_id: configurationId,
+                team_id: teamId,
                 vercel_user_id
             });
 

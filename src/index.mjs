@@ -17,23 +17,21 @@ app.use(express.json());
 
 // Vercel OAuth Callback
 app.get('/vercel/callback', async (req, res) => {
-    const { code, state } = req.query;
+    const { code, state, configurationId, teamId } = req.query;
     
-    console.log(`📡 Vercel Callback Received!`);
-    console.log(`Query Params:`, JSON.stringify(req.query, null, 2));
+    console.log(`📡 Vercel Integration Callback Received!`);
+    console.log(`Params:`, { code: code ? 'PRESENT' : 'MISSING', state, configurationId, teamId });
 
-    if (!code) {
-        console.warn(`❌ Auth Failed: No code received from Vercel. Query was:`, req.query);
-        return res.status(400).send('Missing code. Check Render logs for details.');
+    if (!code || !configurationId) {
+        console.warn(`❌ Auth Failed: Missing parameters. code=${!!code}, configId=${!!configurationId}`);
+        return res.status(400).send('Missing integration parameters. Check Vercel settings.');
     }
 
     try {
-        // For testing, we might need a way to pass the userId through 'state'
-        // or fetch the current session.
         const userId = state || 'a66ceed4-63a5-405a-85b5-9f8f59946690'; 
         
-        await vercelIntegrationService.exchangeCode(code, userId);
-        
+        await vercelIntegrationService.exchangeCode(code, userId, configurationId, teamId);
+
         res.send(`
             <div style="font-family: sans-serif; text-align: center; padding: 50px; background: #0d1117; color: #c9d1d9; height: 100vh;">
                 <h1 style="color: #0070f3;">▲ Vercel Integrated!</h1>
@@ -56,7 +54,7 @@ app.post('/webhooks/vercel', async (req, res) => {
             .createHmac('sha256', VERCEL_SECRET)
             .update(JSON.stringify(req.body))
             .digest('hex');
-        
+
         if (signature !== expectedSignature) {
             return res.status(401).send('Invalid Vercel signature');
         }
@@ -105,7 +103,7 @@ app.post('/webhook', async (req, res) => {
     if (eventType === 'issues' && payload.action === 'labeled') {
         const label = payload.label.name;
         const ullaLabels = ['ulla-build', 'ulla-fix', 'ulla-enhance', 'ulla-refactor'];
-        
+
         if (ullaLabels.includes(label)) {
             await enqueueTask('feature_request', {
                 issue_number: payload.issue.number,
