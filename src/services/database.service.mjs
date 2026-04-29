@@ -95,18 +95,31 @@ class DatabaseService {
      * Look up the GitHub Installation ID for a repository.
      * We scan narrations/fixes as they contain this mapping.
      */
-    async getInstallationIdByRepo(repoName) {
+    /**
+     * Store Vercel Installation tokens linked to a user.
+     */
+    async storeVercelInstallation(userId, data) {
+        if (!this.client) return;
+        await this.client.from('vercel_installations').upsert({
+            user_id: userId,
+            access_token: data.access_token,
+            team_id: data.team_id,
+            vercel_user_id: data.vercel_user_id,
+            updated_at: new Date().toISOString()
+        });
+    }
+
+    /**
+     * Retrieve Vercel token for a user.
+     */
+    async getVercelToken(userId) {
         if (!this.client) return null;
-        
-        // Try narrations first
         const { data } = await this.client
-            .from('narrations')
-            .select('installation_id')
-            .eq('repo_name', repoName)
-            .limit(1)
+            .from('vercel_installations')
+            .select('access_token')
+            .eq('user_id', userId)
             .single();
-        
-        return data?.installation_id || null;
+        return data?.access_token || null;
     }
 }
 

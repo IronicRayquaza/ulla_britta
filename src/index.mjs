@@ -8,11 +8,37 @@ import logger from './services/logger.service.mjs';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import vercelService from './services/vercel.service.mjs';
+import vercelIntegrationService from './services/vercel-integration.service.mjs';
 
 dotenv.config();
 
 const app = express();
 app.use(express.json());
+
+// Vercel OAuth Callback
+app.get('/vercel/callback', async (req, res) => {
+    const { code, state } = req.query; // 'state' usually contains our internal userId
+    
+    if (!code) return res.status(400).send('Missing code');
+
+    try {
+        // For testing, we might need a way to pass the userId through 'state'
+        // or fetch the current session.
+        const userId = state || 'a66ceed4-63a5-405a-85b5-9f8f59946690'; 
+        
+        await vercelIntegrationService.exchangeCode(code, userId);
+        
+        res.send(`
+            <div style="font-family: sans-serif; text-align: center; padding: 50px; background: #0d1117; color: #c9d1d9; height: 100vh;">
+                <h1 style="color: #0070f3;">▲ Vercel Integrated!</h1>
+                <p>Ulla Britta now has account-wide access to your Vercel projects.</p>
+                <p>You can close this window now.</p>
+            </div>
+        `);
+    } catch (e) {
+        res.status(500).send(`Integration Failed: ${e.message}`);
+    }
+});
 
 // Vercel Build Failure Webhook
 app.post('/webhooks/vercel', async (req, res) => {
