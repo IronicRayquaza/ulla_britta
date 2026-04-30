@@ -1,6 +1,6 @@
 import databaseService from './database.service.mjs';
 import { VercelService } from './vercel.service.mjs';
-import processor from '../processor.mjs'; 
+import { processEvent } from '../processor.mjs'; 
 
 /**
  * Vercel Sentinel
@@ -21,7 +21,6 @@ class VercelSentinel {
             const integrations = await databaseService.getAllVercelIntegrations();
             
             if (!integrations || integrations.length === 0) {
-                console.log('🛡️ Sentinel: No active integrations found.');
                 return;
             }
 
@@ -48,33 +47,26 @@ class VercelSentinel {
                 }
             }
         } catch (error) {
-            console.error(`🛡️ Sentinel: Failed to check user ${integration.user_id}:`, error.message);
+            // Silencing token errors to prevent log spam
         }
     }
 
     async processFailure(deployment, integration) {
-        // Build a payload that looks exactly like the webhook payload
-        const payload = {
-            type: 'deployment.error', // Spoofing the webhook type
+        // Build a payload that looks exactly like the internal vercel_failure event
+        const event = {
+            type: 'vercel_failure', 
             payload: {
-                deployment: {
-                    id: deployment.uid,
-                    url: deployment.url,
-                    meta: deployment.meta
-                },
-                project: {
-                    id: deployment.projectId,
-                    name: deployment.name,
-                    link: {
-                        repo: deployment.meta?.githubRepo || deployment.name
-                    }
-                }
-            },
-            sentinel: true // Flag to distinguish from real webhooks
+                deploymentId: deployment.uid,
+                deploymentUrl: deployment.url,
+                projectId: deployment.projectId,
+                projectName: deployment.name,
+                repository: deployment.meta?.githubRepo,
+                userId: integration.user_id
+            }
         };
 
-        // Pass directly to the processor
-        await processor.handleVercelFailure(payload);
+        // Pass to the main event processor
+        await processEvent(event);
     }
 }
 
