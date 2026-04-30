@@ -43,13 +43,21 @@ class DeploymentService {
         try {
             console.log(`🚀 Initiating Vercel Setup for ${repoFullName}...`);
             
+            // 0. Detect Framework
+            const { data: tree } = await client.rest.git.getTree({ owner, repo, tree_sha: repoInfo.default_branch || 'main', recursive: true });
+            const files = tree.tree.map(f => f.path);
+            const framework = files.some(f => f.includes('next.config')) ? 'nextjs' : 
+                             files.some(f => f.includes('vite.config')) ? 'vite' : null;
+
+            console.log(`🔺 Detected framework: ${framework || 'Default'} for ${repoFullName}`);
+
             // Fetch real GitHub Repository ID (Required by Vercel)
-            const { data: repoInfo } = await client.rest.repos.get({ owner, repo });
             const repoId = repoInfo.id;
 
             // 1. Create the Project on Vercel
             const createResponse = await axios.post('https://api.vercel.com/v9/projects', {
                 name: repo,
+                framework: framework,
                 gitRepository: {
                     type: 'github',
                     repo: repoFullName,

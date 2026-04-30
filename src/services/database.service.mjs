@@ -135,6 +135,32 @@ class DatabaseService {
             .single();
         return data?.access_token || null;
     }
+
+    /**
+     * Check if a deployment has already been handled.
+     */
+    async isDeploymentProcessed(deploymentId) {
+        if (!this.client) return false;
+        const { data } = await this.client
+            .from('processed_deployments')
+            .select('id')
+            .eq('deployment_id', deploymentId)
+            .single();
+        return !!data;
+    }
+
+    /**
+     * Mark a deployment as handled.
+     */
+    async markDeploymentProcessed(deploymentId, userId, projectId) {
+        if (!this.client) return;
+        await this.client.from('processed_deployments').insert({
+            deployment_id: deploymentId,
+            user_id: userId,
+            project_id: projectId,
+            status: 'pending'
+        });
+    }
 }
 
 export default new DatabaseService();
