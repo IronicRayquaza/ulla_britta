@@ -11,14 +11,11 @@ class VercelSentinel {
      * Scan all active Vercel integrations for new errors.
      */
     async checkForFailures() {
-        console.log('🛡️ Sentinel: Patrolling for Vercel failures...');
-
         try {
             const integrations = await databaseService.getAllVercelIntegrations();
+            console.log(`🛡️ Sentinel: Found ${integrations?.length || 0} active integrations in DB.`);
             
-            if (!integrations || integrations.length === 0) {
-                return;
-            }
+            if (!integrations || integrations.length === 0) return;
 
             for (const integration of integrations) {
                 await this.checkUserDeployments(integration);
@@ -31,8 +28,9 @@ class VercelSentinel {
     async checkUserDeployments(integration) {
         try {
             const vercel = new VercelService(integration.access_token, integration.team_id);
-            // Get last 20 failed deployments (don't worry about timestamps)
             const failures = await vercel.getFailedDeployments(null); 
+
+            console.log(`📡 Sentinel: User ${integration.user_id} has ${failures.length} ERROR deployments on Vercel.`);
 
             if (failures.length > 0) {
                 for (const deployment of failures) {
@@ -40,7 +38,7 @@ class VercelSentinel {
                 }
             }
         } catch (error) {
-            // Silencing token errors
+            console.error(`🛡️ Sentinel: API Error for user ${integration.user_id}:`, error.message);
         }
     }
 
