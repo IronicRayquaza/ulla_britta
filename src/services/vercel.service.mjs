@@ -2,11 +2,12 @@ import axios from 'axios';
 
 /**
  * Vercel Service
- * Integration for monitoring and managing Vercel deployments.
+ * Handles interactions with the Vercel API for log fetching and redeployments.
  */
-class VercelService {
-    constructor() {
-        this.token = process.env.VERCEL_TOKEN;
+export class VercelService {
+    constructor(token, teamId = null) {
+        this.token = token || process.env.VERCEL_TOKEN;
+        this.teamId = teamId;
         this.baseUrl = 'https://api.vercel.com';
     }
 

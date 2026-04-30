@@ -1,6 +1,6 @@
 import databaseService from './database.service.mjs';
 import { VercelService } from './vercel.service.mjs';
-import { processor } from '../processor.mjs'; // Assuming processor exists
+import processor from '../processor.mjs'; 
 
 /**
  * Vercel Sentinel
