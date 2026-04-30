@@ -112,6 +112,18 @@ class DatabaseService {
     }
 
     /**
+     * Get all active Vercel integrations (for Sentinel).
+     */
+    async getAllVercelIntegrations() {
+        if (!this.client) return [];
+        const { data } = await this.client
+            .from('vercel_integrations')
+            .select('*')
+            .eq('status', 'active');
+        return data || [];
+    }
+
+    /**
      * Retrieve Vercel token by user_id.
      */
     async getVercelToken(userId) {

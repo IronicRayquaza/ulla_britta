@@ -9,11 +9,20 @@ import crypto from 'crypto';
 import dotenv from 'dotenv';
 import vercelService from './services/vercel.service.mjs';
 import vercelIntegrationService from './services/vercel-integration.service.mjs';
+import vercelSentinel from './services/vercel-sentinel.service.mjs';
 
 dotenv.config();
 
 const app = express();
 app.use(express.json());
+
+// Start the Vercel Sentinel (Polls every 2 minutes)
+setInterval(() => {
+    vercelSentinel.checkForFailures().catch(err => console.error('Sentinel Error:', err));
+}, 2 * 60 * 1000);
+
+// Run once immediately on startup
+vercelSentinel.checkForFailures().catch(err => console.error('Sentinel Startup Error:', err));
 
 // Vercel OAuth Callback
 app.get('/vercel/callback', async (req, res) => {

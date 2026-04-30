@@ -36,7 +36,42 @@ class VercelService {
     }
 
     /**
-     * Triggers a redeployment of an existing deployment.
+     * Get failed deployments since a specific time
+     * @param {Date} since - Only get failures after this time
+     */
+    async getFailedDeployments(since) {
+        const sinceTimestamp = since.getTime();
+        const url = `${this.baseUrl}/v6/deployments`;
+        
+        const params = new URLSearchParams({
+            limit: '20',
+            state: 'ERROR',
+            ...(this.teamId && { teamId: this.teamId })
+        });
+
+        const response = await fetch(`${url}?${params}`, {
+            headers: {
+                'Authorization': `Bearer ${this.accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(`Vercel API error: ${errorData.error?.message || response.status}`);
+        }
+
+        const data = await response.json();
+        
+        // Filter deployments that happened after 'since'
+        return data.deployments.filter(deployment => {
+            const deploymentTime = new Date(deployment.created).getTime();
+            return deploymentTime > sinceTimestamp;
+        });
+    }
+
+    /**
+     * Trigger redeploy for a failed build.
      */
     async triggerRedeploy(deploymentId) {
         if (!this.token) return null;
