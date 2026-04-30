@@ -26,6 +26,7 @@ vercelSentinel.checkForFailures().catch(err => console.error('Sentinel Startup E
 
 // Vercel OAuth Callback
 app.get('/vercel/callback', async (req, res) => {
+    console.log(`📡 Vercel Callback Raw Query:`, JSON.stringify(req.query));
     const { code, state, configurationId, teamId } = req.query;
     
     console.log(`📡 Vercel Integration Callback Received!`);
