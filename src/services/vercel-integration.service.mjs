@@ -39,8 +39,9 @@ class VercelIntegrationService {
 
             return response.data;
         } catch (error) {
-            console.error('❌ Vercel OAuth Exchange Failed:', error.response?.data || error.message);
-            throw error;
+            const vercelError = error.response?.data?.error_description || error.response?.data?.error || error.message;
+            console.error('❌ Vercel OAuth Exchange Failed:', vercelError);
+            throw new Error(vercelError);
         }
     }
 
