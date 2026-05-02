@@ -200,14 +200,22 @@ class DatabaseService {
     async getInstallationIdByRepo(repoFullName, userId) {
         if (!this.client) return null;
         
-        // 1. Try by repo owner name
-        let { data } = await this.client
+        const login = repoFullName.split('/')[0];
+        console.log(`📡 DB: Searching for GitHub Installation for login: "${login}" or user: ${userId}`);
+
+        // 1. Try by repo owner name (Case-Insensitive)
+        let { data, error } = await this.client
             .from('github_installations')
-            .select('installation_id')
-            .eq('account_login', repoFullName.split('/')[0])
+            .select('installation_id, account_login')
+            .ilike('account_login', login)
             .maybeSingle();
 
-        if (data?.installation_id) return data.installation_id;
+        if (data?.installation_id) {
+            console.log(`✅ DB: Found Installation ID ${data.installation_id} for ${data.account_login}`);
+            return data.installation_id;
+        }
+
+        if (error) console.error('📊 DB Error (Installation Lookup):', error.message);
 
         // 2. Fallback: Get ANY installation linked to this dashboard user
         if (userId) {
@@ -218,9 +226,13 @@ class DatabaseService {
                 .limit(1)
                 .maybeSingle();
             
-            return userInst?.installation_id || null;
+            if (userInst?.installation_id) {
+                console.log(`✅ DB: Found Fallback Installation ID ${userInst.installation_id} for user ${userId}`);
+                return userInst.installation_id;
+            }
         }
 
+        console.warn(`❌ DB: No GitHub Installation found for "${login}" in the database.`);
         return null;
     }
 }
