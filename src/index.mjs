@@ -28,7 +28,7 @@ vercelSentinel.checkForFailures().catch(err => console.error('Sentinel Startup E
 app.get('/vercel/callback', async (req, res) => {
     console.log(`📡 Vercel Callback Raw Query:`, JSON.stringify(req.query));
     const { code, state, configurationId, teamId } = req.query;
-    
+
     console.log(`📡 Vercel Integration Callback Received!`);
     console.log(`Params:`, { code: code ? 'PRESENT' : 'MISSING', state, configurationId, teamId });
 
@@ -38,8 +38,8 @@ app.get('/vercel/callback', async (req, res) => {
     }
 
     try {
-        const userId = state || 'a66ceed4-63a5-405a-85b5-9f8f59946690'; 
-        
+        const userId = state || 'a66ceed4-63a5-405a-85b5-9f8f59946690';
+
         await vercelIntegrationService.exchangeCode(code, userId, configurationId, teamId);
 
         res.send(`
