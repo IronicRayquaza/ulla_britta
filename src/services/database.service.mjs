@@ -123,6 +123,15 @@ class DatabaseService {
      */
     async getAllVercelIntegrations() {
         if (!this.client) return [];
+        
+        // Debug: Check total count in DB
+        const { count, error: countErr } = await this.client
+            .from('vercel_integrations')
+            .select('*', { count: 'exact', head: true });
+        
+        console.log(`📊 DB Status: Total Integrations = ${count || 0}`);
+        if (countErr) console.error('📊 DB Error:', countErr.message);
+
         const { data } = await this.client
             .from('vercel_integrations')
             .select('*')
