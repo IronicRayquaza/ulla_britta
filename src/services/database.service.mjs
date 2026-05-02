@@ -125,6 +125,8 @@ class DatabaseService {
             user_vercel_id: data.vercel_user_id,
             status: 'active',
             installed_at: new Date().toISOString()
+        }, { 
+            onConflict: 'configuration_id' // This prevents duplicate rows!
         });
 
         if (error) {
