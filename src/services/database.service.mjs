@@ -101,11 +101,13 @@ class DatabaseService {
     async storeVercelIntegration(userId, data) {
         if (!this.client) return;
 
+        console.log(`📡 DB: Target URL is ${SUPABASE_URL?.substring(0, 20)}...`);
+
         // 0. Ensure a dummy profile exists to satisfy Foreign Key constraints
-        // (Supabase upsert doesn't throw, it returns {error}, so we just await it)
+        // Fix: Your schema uses 'id' as the primary key for profiles
         await this.client.from('profiles').upsert({ 
-            user_id: userId, 
-            github_username: 'IronicRayquaza' 
+            id: userId, 
+            username: 'IronicRayquaza' 
         });
 
         console.log(`📡 DB: Attempting to store integration for ${userId}...`);
