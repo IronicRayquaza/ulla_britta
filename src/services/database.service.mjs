@@ -102,10 +102,11 @@ class DatabaseService {
         if (!this.client) return;
 
         // 0. Ensure a dummy profile exists to satisfy Foreign Key constraints
+        // (Supabase upsert doesn't throw, it returns {error}, so we just await it)
         await this.client.from('profiles').upsert({ 
             user_id: userId, 
-            github_username: 'IronicRayquaza' // Fallback for testing
-        }).catch(() => {});
+            github_username: 'IronicRayquaza' 
+        });
 
         console.log(`📡 DB: Attempting to store integration for ${userId}...`);
 
