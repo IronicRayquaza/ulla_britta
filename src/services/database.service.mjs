@@ -100,6 +100,15 @@ class DatabaseService {
      */
     async storeVercelIntegration(userId, data) {
         if (!this.client) return;
+
+        // 0. Ensure a dummy profile exists to satisfy Foreign Key constraints
+        await this.client.from('profiles').upsert({ 
+            user_id: userId, 
+            github_username: 'IronicRayquaza' // Fallback for testing
+        }).catch(() => {});
+
+        console.log(`📡 DB: Attempting to store integration for ${userId}...`);
+
         const { error } = await this.client.from('vercel_integrations').upsert({
             user_id: userId,
             access_token: data.access_token,
