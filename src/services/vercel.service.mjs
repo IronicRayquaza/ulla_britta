@@ -18,7 +18,11 @@ export class VercelService {
         if (!this.token) return "Vercel token not configured.";
         
         try {
-            const url = `${this.baseUrl}/v3/deployments/${deploymentId}/events`;
+            const params = new URLSearchParams({
+                ...(this.teamId && { teamId: this.teamId })
+            });
+            const url = `${this.baseUrl}/v3/deployments/${deploymentId}/events?${params}`;
+            
             const { data: events } = await axios.get(url, {
                 headers: { Authorization: `Bearer ${this.token}` }
             });
@@ -80,7 +84,11 @@ export class VercelService {
         if (!this.token) return null;
 
         try {
-            const url = `${this.baseUrl}/v13/deployments/${deploymentId}/redeploy`;
+            const params = new URLSearchParams({
+                ...(this.teamId && { teamId: this.teamId })
+            });
+            const url = `${this.baseUrl}/v13/deployments/${deploymentId}/redeploy?${params}`;
+            
             const { data } = await axios.post(url, {}, {
                 headers: { Authorization: `Bearer ${this.token}` }
             });
