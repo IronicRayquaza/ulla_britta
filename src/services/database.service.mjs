@@ -194,6 +194,21 @@ class DatabaseService {
             status: 'pending'
         });
     }
+    /**
+     * Look up the GitHub Installation ID for a repository.
+     */
+    async getInstallationIdByRepo(repoFullName) {
+        if (!this.client) return null;
+        
+        // We look in the github_installations table
+        const { data } = await this.client
+            .from('github_installations')
+            .select('installation_id')
+            .eq('account_login', repoFullName.split('/')[0])
+            .single();
+
+        return data?.installation_id || null;
+    }
 }
 
 export default new DatabaseService();
