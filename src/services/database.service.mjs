@@ -197,17 +197,31 @@ class DatabaseService {
     /**
      * Look up the GitHub Installation ID for a repository.
      */
-    async getInstallationIdByRepo(repoFullName) {
+    async getInstallationIdByRepo(repoFullName, userId) {
         if (!this.client) return null;
         
-        // We look in the github_installations table
-        const { data } = await this.client
+        // 1. Try by repo owner name
+        let { data } = await this.client
             .from('github_installations')
             .select('installation_id')
             .eq('account_login', repoFullName.split('/')[0])
-            .single();
+            .maybeSingle();
 
-        return data?.installation_id || null;
+        if (data?.installation_id) return data.installation_id;
+
+        // 2. Fallback: Get ANY installation linked to this dashboard user
+        if (userId) {
+            const { data: userInst } = await this.client
+                .from('github_installations')
+                .select('installation_id')
+                .eq('user_id', userId)
+                .limit(1)
+                .maybeSingle();
+            
+            return userInst?.installation_id || null;
+        }
+
+        return null;
     }
 }
 

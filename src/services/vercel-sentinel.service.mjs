@@ -47,12 +47,26 @@ class VercelSentinel {
         const isProcessed = await databaseService.isDeploymentProcessed(deployment.uid);
         if (isProcessed) return;
 
-        console.log(`🚨 Sentinel: Found NEW failure for user ${integration.user_id}: ${deployment.uid}`);
+        // 2. Resolve the Full Repository Name and GitHub Installation ID
+        // Vercel meta often has githubCommitOrg and githubCommitRepo
+        const repoOwner = deployment.meta?.githubCommitOrg || deployment.meta?.githubOrg || 'IronicRayquaza';
+        const repoName = deployment.meta?.githubCommitRepo || deployment.meta?.githubRepo || deployment.name;
+        const fullRepo = `${repoOwner}/${repoName}`;
 
-        // 2. Mark as processed immediately
+        // Get the GitHub Installation ID linked to this user
+        const installationId = await databaseService.getInstallationIdByRepo(fullRepo, integration.user_id);
+
+        if (!installationId) {
+            console.warn(`⚠️ Skipping task for ${fullRepo}: No GitHub Installation found for user.`);
+            return;
+        }
+
+        console.log(`🚨 Sentinel: Found NEW failure for user ${integration.user_id}: ${deployment.uid} (${fullRepo})`);
+
+        // 3. Mark as processed immediately
         await databaseService.markDeploymentProcessed(deployment.uid, integration.user_id, deployment.projectId);
 
-        // 3. Build a payload and process
+        // 4. Build a payload and process
         const event = {
             type: 'vercel_failure', 
             payload: {
@@ -60,7 +74,8 @@ class VercelSentinel {
                 deploymentUrl: deployment.url,
                 projectId: deployment.projectId,
                 projectName: deployment.name,
-                repository: deployment.meta?.githubRepo,
+                repository: fullRepo,
+                installationId: installationId,
                 userId: integration.user_id
             }
         };
