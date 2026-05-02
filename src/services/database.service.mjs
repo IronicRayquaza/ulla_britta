@@ -104,11 +104,16 @@ class DatabaseService {
         console.log(`📡 DB: Target URL is ${SUPABASE_URL?.substring(0, 20)}...`);
 
         // 0. Ensure a dummy profile exists to satisfy Foreign Key constraints
-        // Fix: Your schema uses 'id' as the primary key for profiles
-        await this.client.from('profiles').upsert({ 
+        console.log(`📡 DB: Ensuring profile exists for ${userId}...`);
+        const { error: profErr } = await this.client.from('profiles').upsert({ 
             id: userId, 
-            username: 'IronicRayquaza' 
+            username: 'IronicRayquaza',
+            email: 'admin@ulla-britta.agent' // Added email just in case it's required
         });
+
+        if (profErr) {
+            console.warn(`⚠️ Profile Creation Warning (Might exist): ${profErr.message}`);
+        }
 
         console.log(`📡 DB: Attempting to store integration for ${userId}...`);
 
