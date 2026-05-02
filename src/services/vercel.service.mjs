@@ -41,7 +41,8 @@ export class VercelService {
      * @param {Date} since - Only get failures after this time
      */
     async getFailedDeployments(since) {
-        const sinceTimestamp = since.getTime();
+        // Fix: If 'since' is null, default to a very old timestamp
+        const sinceTimestamp = since ? since.getTime() : 0;
         const url = `${this.baseUrl}/v6/deployments`;
         
         const params = new URLSearchParams({
@@ -50,22 +51,23 @@ export class VercelService {
             ...(this.teamId && { teamId: this.teamId })
         });
 
+        // Fix: Use this.token instead of this.accessToken
         const response = await fetch(`${url}?${params}`, {
             headers: {
-                'Authorization': `Bearer ${this.accessToken}`,
+                'Authorization': `Bearer ${this.token}`,
                 'Content-Type': 'application/json'
             }
         });
 
         if (!response.ok) {
-            const errorData = await response.json();
+            const errorData = await response.json().catch(() => ({}));
             throw new Error(`Vercel API error: ${errorData.error?.message || response.status}`);
         }
 
         const data = await response.json();
         
         // Filter deployments that happened after 'since'
-        return data.deployments.filter(deployment => {
+        return (data.deployments || []).filter(deployment => {
             const deploymentTime = new Date(deployment.created).getTime();
             return deploymentTime > sinceTimestamp;
         });
