@@ -100,7 +100,7 @@ class DatabaseService {
      */
     async storeVercelIntegration(userId, data) {
         if (!this.client) return;
-        await this.client.from('vercel_integrations').upsert({
+        const { error } = await this.client.from('vercel_integrations').upsert({
             user_id: userId,
             access_token: data.access_token,
             configuration_id: data.configuration_id,
@@ -109,6 +109,13 @@ class DatabaseService {
             status: 'active',
             installed_at: new Date().toISOString()
         });
+
+        if (error) {
+            console.error('❌ Supabase Store Error:', error.message);
+            throw new Error(`Database save failed: ${error.message}`);
+        } else {
+            console.log(`✅ Vercel Integration Saved for User ${userId}`);
+        }
     }
 
     /**
