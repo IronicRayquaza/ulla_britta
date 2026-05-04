@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import { enqueueTask } from './queue.mjs';
 import githubService from './services/github.service.mjs';
 import deploymentService from './services/deployment.service.mjs';
