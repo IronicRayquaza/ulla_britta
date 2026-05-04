@@ -73,6 +73,39 @@ class GitHubService {
   }
 
   /**
+   * Creates a new repository on the user's account.
+   */
+  async createRepository(client, name, description = '', isPrivate = false) {
+    try {
+      const { data } = await client.rest.repos.createForAuthenticatedUser({
+        name,
+        description,
+        private: isPrivate,
+        auto_init: true
+      });
+      return data;
+    } catch (e) {
+      if (e.message.includes('already exists')) {
+          // Get existing repo info
+          const { data } = await client.rest.repos.get({
+              owner: 'IronicRayquaza', // Fallback for testing
+              repo: name
+          });
+          return data;
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Pushes a file directly to a branch (usually main for new repos).
+   */
+  async pushFile(owner, repo, path, content, message, installationId) {
+      const client = await this.getClient(installationId);
+      return await this.createOrUpdateFile(client, owner, repo, path, message, content, 'main');
+  }
+
+  /**
    * Returns a full-featured Octokit instance (REST + Actions + Apps).
    */
   async getClient(installationId) {

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ulla Britta | Command Center</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Outfit:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background: radial-gradient(circle at top right, #1a1b3b, #0d0e1a);
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .glow-text {
+            text-shadow: 0 0 10px rgba(139, 92, 246, 0.5);
+        }
+        .prismatic-btn {
+            background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+            box-shadow: 0 4px 15px rgba(139, 92, 246, 0.3);
+        }
+        .chat-scroll::-webkit-scrollbar {
+            width: 4px;
+        }
+        .chat-scroll::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+        }
+        .message-in {
+            animation: slideIn 0.3s ease-out;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+    <div class="max-w-5xl mx-auto h-[90vh] flex flex-col">
+        <!-- Header -->
+        <header class="flex items-center justify-between mb-8">
+            <div>
+                <h1 class="text-3xl font-bold font-['Outfit'] glow-text flex items-center gap-3">
+                    <span class="text-indigo-500">🛡️</span> Ulla Britta
+                </h1>
+                <p class="text-slate-400 text-sm mt-1">SRE Command Center & Architect</p>
+            </div>
+            <div class="flex gap-4">
+                <div class="glass px-4 py-2 rounded-full text-xs flex items-center gap-2">
+                    <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                    Sentinel: Active
+                </div>
+                <div class="glass px-4 py-2 rounded-full text-xs flex items-center gap-2">
+                    <span class="w-2 h-2 bg-purple-500 rounded-full"></span>
+                    Worker: Standby
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Chat Area -->
+        <main class="flex-1 glass rounded-3xl flex flex-col overflow-hidden shadow-2xl relative">
+            <!-- Background Glow -->
+            <div class="absolute -top-24 -left-24 w-64 h-64 bg-indigo-600/10 rounded-full blur-3xl"></div>
+            <div class="absolute -bottom-24 -right-24 w-64 h-64 bg-purple-600/10 rounded-full blur-3xl"></div>
+
+            <!-- Messages Container -->
+            <div id="chat-container" class="flex-1 overflow-y-auto p-6 space-y-6 chat-scroll relative z-10">
+                <!-- Welcome Message -->
+                <div class="flex gap-4 message-in">
+                    <div class="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-xl shadow-lg">🤖</div>
+                    <div class="max-w-[80%] bg-white/5 border border-white/10 p-4 rounded-2xl rounded-tl-none">
+                        <p class="font-semibold text-indigo-400 mb-2">Ulla Britta</p>
+                        <p class="text-slate-300 leading-relaxed">
+                            Greeting Architect. I am online and ready to assist.<br><br>
+                            I can help you with:<br>
+                            • <code class="text-purple-400">@ulla status</code> - System health<br>
+                            • <code class="text-purple-400">@ulla create [idea]</code> - Scaffold a new repo<br>
+                            • Or ask me anything naturally!
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Suggestions -->
+            <div class="px-6 py-2 flex gap-3 overflow-x-auto no-scrollbar relative z-10">
+                <button onclick="appendCommand('@ulla status')" class="glass px-4 py-2 rounded-xl text-xs hover:bg-white/10 transition-all text-slate-300">📊 Status</button>
+                <button onclick="appendCommand('@ulla create my new music platform')" class="glass px-4 py-2 rounded-xl text-xs hover:bg-white/10 transition-all text-slate-300">🏗️ Create Repo</button>
+                <button onclick="appendCommand('Show me recent fixes')" class="glass px-4 py-2 rounded-xl text-xs hover:bg-white/10 transition-all text-slate-300">🔧 Recent Fixes</button>
+            </div>
+
+            <!-- Input Area -->
+            <div class="p-6 bg-white/5 border-t border-white/10 relative z-10">
+                <form id="chat-form" class="flex gap-4">
+                    <input 
+                        type="text" 
+                        id="user-input"
+                        placeholder="Type a command or ask a question..." 
+                        class="flex-1 bg-white/5 border border-white/10 rounded-2xl px-6 py-4 focus:outline-none focus:border-indigo-500 transition-all text-slate-200 placeholder:text-slate-500"
+                        autocomplete="off"
+                    >
+                    <button type="submit" class="prismatic-btn px-8 py-4 rounded-2xl font-bold text-white transition-all hover:scale-105 active:scale-95">
+                        Send
+                    </button>
+                </form>
+            </div>
+        </main>
+
+        <footer class="mt-6 text-center text-slate-500 text-xs">
+            &copy; 2026 Ulla Britta Agentic SRE • Built for IronicRayquaza
+        </footer>
+    </div>
+
+    <script>
+        const form = document.getElementById('chat-form');
+        const input = document.getElementById('user-input');
+        const container = document.getElementById('chat-container');
+
+        function addMessage(role, content, isUser = false) {
+            const div = document.createElement('div');
+            div.className = `flex gap-4 message-in ${isUser ? 'flex-row-reverse' : ''}`;
+            
+            const avatar = isUser ? '👤' : '🤖';
+            const color = isUser ? 'bg-slate-700' : 'bg-indigo-600';
+            const name = isUser ? 'You' : 'Ulla Britta';
+            const nameColor = isUser ? 'text-slate-400' : 'text-indigo-400';
+
+            div.innerHTML = `
+                <div class="w-10 h-10 rounded-full ${color} flex items-center justify-center text-xl shadow-lg">${avatar}</div>
+                <div class="max-w-[80%] ${isUser ? 'bg-indigo-600/20 border-indigo-500/20' : 'bg-white/5 border-white/10'} border p-4 rounded-2xl ${isUser ? 'rounded-tr-none' : 'rounded-tl-none'}">
+                    <p class="font-semibold ${nameColor} mb-1">${name}</p>
+                    <div class="text-slate-300 leading-relaxed">${content.replace(/\n/g, '<br>')}</div>
+                </div>
+            `;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function appendCommand(cmd) {
+            input.value = cmd;
+            input.focus();
+        }
+
+        form.onsubmit = async (e) => {
+            e.preventDefault();
+            const message = input.value.trim();
+            if (!message) return;
+
+            addMessage('user', message, true);
+            input.value = '';
+
+            try {
+                const res = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message })
+                });
+                const data = await res.json();
+                addMessage('assistant', data.response);
+            } catch (err) {
+                addMessage('assistant', '❌ Ulla is temporarily disconnected. Check logs.');
+            }
+        };
+    </script>
+</body>
+</html>

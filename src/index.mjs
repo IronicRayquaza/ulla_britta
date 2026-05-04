@@ -10,11 +10,27 @@ import dotenv from 'dotenv';
 import vercelService from './services/vercel.service.mjs';
 import vercelIntegrationService from './services/vercel-integration.service.mjs';
 import vercelSentinel from './services/vercel-sentinel.service.mjs';
+import chatService from './services/chat.service.mjs';
 
 dotenv.config();
 
 const app = express();
 app.use(express.json());
+app.use(express.static('public')); // Serve the dashboard
+
+// Chat API Endpoint
+app.post('/api/chat', async (req, res) => {
+    try {
+        const { message, userId } = req.body;
+        const fallbackId = 'a66ceed4-63a5-405a-85b5-9f8f59946690';
+        
+        const response = await chatService.processMessage(userId || fallbackId, message);
+        res.json({ response });
+    } catch (error) {
+        console.error('Chat API Error:', error);
+        res.status(500).json({ error: 'Ulla is having trouble thinking right now.' });
+    }
+});
 
 // Start the Vercel Sentinel (Polls every 2 minutes)
 setInterval(() => {
