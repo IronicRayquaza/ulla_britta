@@ -30,7 +30,7 @@ app.get('/api/chat/status', async (req, res) => {
         const userId = 'a66ceed4-63a5-405a-85b5-9f8f59946690';
         const activity = await databaseService.getRecentActivity(userId, 5);
         const integrations = await databaseService.getAllVercelIntegrations();
-        
+
         res.json({
             status: 'online',
             activeIntegrations: integrations.length,
@@ -47,7 +47,7 @@ app.post('/api/chat', async (req, res) => {
     try {
         const { message, userId } = req.body;
         const fallbackId = 'a66ceed4-63a5-405a-85b5-9f8f59946690';
-        
+
         const response = await chatService.processMessage(userId || fallbackId, message);
         res.json({ response });
     } catch (error) {

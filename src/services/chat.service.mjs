@@ -57,7 +57,7 @@ class ChatService {
             }
         ];
 
-        this.model = genAI.getGenerativeModel({ 
+        this.model = genAI.getGenerativeModel({
             model: 'gemini-3-flash-preview',
             tools: this.tools
         });
@@ -81,14 +81,14 @@ class ChatService {
 
             let result = await chat.sendMessage(message);
             let response = result.response;
-            
+
             // Handle Tool Calls (Potential crash point fixed)
             const calls = response.functionCalls();
-            
+
             if (calls && calls.length > 0) {
                 const call = calls[0];
                 const actionResult = await this.executeTool(userId, call.name, call.args);
-                
+
                 // Final response with tool results
                 const finalResult = await chat.sendMessage([{
                     functionResponse: {
@@ -112,16 +112,16 @@ class ChatService {
                 case 'get_sentinel_activity':
                     const activity = await databaseService.getRecentActivity(userId, 10);
                     return JSON.stringify(activity);
-                
+
                 case 'github_action':
                     const installationId = await databaseService.getInstallationIdByRepo(args.repoFullName, userId);
                     const client = await githubService.getClient(installationId);
                     const [owner, repo] = args.repoFullName.split('/');
-                    
+
                     if (args.action === 'star') await githubService.starRepository(client, owner, repo);
                     if (args.action === 'fork') await githubService.forkRepository(client, owner, repo);
                     if (args.action === 'merge') await githubService.mergePullRequest(client, owner, repo, args.prNumber);
-                    
+
                     return `Action ${args.action} on ${args.repoFullName} completed successfully.`;
 
                 case 'create_repository':

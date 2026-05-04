@@ -242,7 +242,7 @@ class DatabaseService {
    */
   async getRecentActivity(userId, limit = 10) {
     const { data, error } = await this.client
-      .from('auto_fixes')
+      .from('processed_deployments')
       .select('*')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
