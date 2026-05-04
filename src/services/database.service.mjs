@@ -237,6 +237,23 @@ class DatabaseService {
         console.warn(`❌ DB: No GitHub Installation found for "${login}" in the database.`);
         return null;
     }
+  /**
+   * Fetches recent activity for a user (fixes and deployments).
+   */
+  async getRecentActivity(userId, limit = 10) {
+    const { data, error } = await this.client
+      .from('auto_fixes')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+        console.error('❌ Error fetching activity:', error);
+        return [];
+    }
+    return data;
+  }
 }
 
 export default new DatabaseService();

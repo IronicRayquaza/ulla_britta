@@ -1,226 +1,159 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import repoCreatorService from './repo-creator.service.mjs';
 import databaseService from './database.service.mjs';
-import vercelService from './vercel.service.mjs';
+import githubService from './github.service.mjs';
+import { sendEmail } from './email.service.mjs';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 /**
- * Chat Service
- * Handles conversational state and command routing.
+ * Integrated Chat Agent
+ * The "Prefrontal Cortex" of Ulla Britta.
+ * Connects natural language to the Sentinel's memory and the GitHub App's hands.
  */
 class ChatService {
     constructor() {
-        this.model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
-        this.sessions = new Map(); // Store conversational state for repo creation
+        // Define the Tool Chest for Gemini 3
+        this.tools = [
+            {
+                functionDeclarations: [
+                    {
+                        name: "get_sentinel_activity",
+                        description: "Fetches the latest autonomous fixes and failures from the Supabase memory.",
+                        parameters: { type: "object", properties: {} }
+                    },
+                    {
+                        name: "github_action",
+                        description: "Performs a real GitHub action like star, fork, or merge.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                action: { type: "string", enum: ["star", "fork", "merge"] },
+                                repoFullName: { type: "string", description: "The owner/repo name" },
+                                prNumber: { type: "number", description: "Only for merge action" }
+                            },
+                            required: ["action", "repoFullName"]
+                        }
+                    },
+                    {
+                        name: "create_repository",
+                        description: "Scaffolds and creates a new repository based on a tech stack and prompt.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                prompt: { type: "string", description: "What the repo is about" },
+                                techStack: { type: "string", description: "e.g. Next.js, React, Node" }
+                            },
+                            required: ["prompt", "techStack"]
+                        }
+                    },
+                    {
+                        name: "send_note",
+                        description: "Sends a quick email notification to the user.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                message: { type: "string" }
+                            },
+                            required: ["message"]
+                        }
+                    }
+                ]
+            }
+        ];
+
+        this.model = genAI.getGenerativeModel({ 
+            model: 'gemini-3-flash-preview',
+            tools: this.tools
+        });
     }
 
     /**
-     * Processes an incoming message and returns a response.
+     * Processes a message using the Agentic Loop.
      */
     async processMessage(userId, message) {
-        const lower = message.toLowerCase().trim();
-
-        // 1. Handle Active Creation Sessions
-        if (this.sessions.has(userId)) {
-            return await this.continueRepoCreation(userId, message);
-        }
-
-        // 2. Handle Commands
-        if (lower.startsWith('@ulla ')) {
-            const parts = lower.slice(6).trim().split(' ');
-            const command = parts[0];
-            const args = parts.slice(1);
-
-            switch (command) {
-                case 'create':
-                    return await this.startRepoCreation(userId, args.join(' '));
-                case 'summarize':
-                    return await this.getRepoSummary(userId, args[0]);
-                case 'fork':
-                    return await this.handleGitHubAction(userId, 'fork', args[0]);
-                case 'star':
-                    return await this.handleGitHubAction(userId, 'star', args[0]);
-                case 'merge':
-                    return await this.handleGitHubAction(userId, 'merge', args[0], args[1]);
-                case 'email':
-                    return await this.sendQuickEmail(userId, args.join(' '));
-                case 'status':
-                    return await this.getSystemStatus(userId);
-                case 'help':
-                    return this.getHelpMessage();
-                default:
-                    return `🤖 I'm not sure how to do \`${command}\` yet. Type \`@ulla help\` for a list of skills.`;
-            }
-        }
-
-        // 3. Natural Language (Gemini fallback)
-        return await this.chatNaturally(userId, message);
-    }
-
-    async startRepoCreation(userId, prompt) {
-        if (!prompt) return "🤖 What kind of repo should I create? (e.g., '@ulla create a music platform')";
-        
-        this.sessions.set(userId, { 
-            step: 'tech_stack', 
-            prompt,
-            data: {} 
-        });
-
-        return `🏗️ **Architecting Mode Active**\n\nSounds like a great project! What **tech stack** should I use? (e.g., Next.js, Vite/React, or Node.js)`;
-    }
-
-    async continueRepoCreation(userId, message) {
-        const session = this.sessions.get(userId);
-
-        if (session.step === 'tech_stack') {
-            session.data.techStack = message;
-            session.step = 'confirm';
-            return `✅ Got it. I'll scaffold a **${message}** project for **"${session.prompt}"**.\n\nShould I go ahead and push this to your GitHub? (Yes/No)`;
-        }
-
-        if (session.step === 'confirm' && message.toLowerCase().includes('yes')) {
-            this.sessions.delete(userId); // Clear session
+        // 1. Load Live Context (The "Self-Awareness" Step)
+        const activity = await databaseService.getRecentActivity(userId, 5);
+        const context = `
+            SYSTEM STATUS:
+            - User ID: ${userId}
+            - Recent Activity from Sentinel: ${JSON.stringify(activity)}
             
-            // Background Scaffolding
-            this.executeRepoCreation(userId, session.prompt, session.data.techStack);
+            You are Ulla Britta. Use the tools provided to act on GitHub or read your memory.
+            Always confirm actions to the user.
+        `;
 
-            return `🚀 **Deployment Initiated!**\n\nI'm scaffolding the code and pushing it to your GitHub now. I'll send you an email once it's live!`;
+        const chat = this.model.startChat();
+        
+        // 2. The Interaction Loop
+        let result = await chat.sendMessage(message);
+        let response = result.response;
+        const call = response.functionCalls()?.[0];
+
+        if (call) {
+            // 3. The Execution Phase
+            const actionResult = await this.executeTool(userId, call.name, call.args);
+            
+            // 4. Report back to Gemini so it can explain the result to the user
+            const finalResult = await chat.sendMessage([{
+                functionResponse: {
+                    name: call.name,
+                    response: { result: actionResult }
+                }
+            }]);
+            return finalResult.response.text();
         }
 
-        this.sessions.delete(userId);
-        return "🛑 Creation cancelled. Let me know if you need anything else!";
+        return response.text();
+    }
+
+    /**
+     * Tool Executor
+     */
+    async executeTool(userId, name, args) {
+        console.log(`🤖 Ulla executing tool: ${name}`, args);
+        
+        switch (name) {
+            case 'get_sentinel_activity':
+                return await databaseService.getRecentActivity(userId, 10);
+            
+            case 'github_action':
+                const installationId = await databaseService.getInstallationIdByRepo(args.repoFullName, userId);
+                const client = await githubService.getClient(installationId);
+                const [owner, repo] = args.repoFullName.split('/');
+                
+                if (args.action === 'star') await githubService.starRepository(client, owner, repo);
+                if (args.action === 'fork') await githubService.forkRepository(client, owner, repo);
+                if (args.action === 'merge') await githubService.mergePullRequest(client, owner, repo, args.prNumber);
+                
+                return "Action successful.";
+
+            case 'create_repository':
+                // This triggers the scaffolding logic background
+                this.executeRepoCreation(userId, args.prompt, args.techStack);
+                return "Creation initiated. I will notify you via email when the repo is pushed.";
+
+            case 'send_note':
+                await sendEmail({
+                    to: 'satyam4698@gmail.com',
+                    subject: '📩 Ulla Britta Note',
+                    text: args.message
+                });
+                return "Email sent.";
+
+            default:
+                return "Tool not found.";
+        }
     }
 
     async executeRepoCreation(userId, prompt, techStack) {
         try {
-            // Clean naming: "Create a music app" -> "music-app"
-            const repoName = prompt
-                .toLowerCase()
-                .replace(/create|a|new|repo|for|my/g, '') // Remove fluff
-                .trim()
-                .replace(/[^a-z0-9]/g, '-') // Replace symbols
-                .replace(/-+/g, '-') // Remove double dashes
-                .slice(0, 20); // Keep it short
-                
+            const repoName = prompt.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20);
             const files = await repoCreatorService.scaffoldProject(prompt, techStack);
             await repoCreatorService.createAndPush(userId, repoName, prompt, files);
-            console.log(`✅ Project ${repoName} created successfully.`);
         } catch (error) {
-            console.error('❌ Failed to create repo:', error);
+            console.error('❌ Agent Background Repo Creation Failed:', error);
         }
-    }
-
-    async getSystemStatus(userId) {
-        const integrations = await databaseService.getAllVercelIntegrations();
-        const activeCount = integrations.length;
-        
-        return `📊 **Ulla Britta Health Report**\n\n` +
-               `- **Vercel Sentinel**: 🟢 Online\n` +
-               `- **Active Integrations**: ${activeCount}\n` +
-               `- **Worker Tier**: 🦾 Active\n\n` +
-               `I am currently monitoring your deployments for failures.`;
-    }
-
-    async getRepoSummary(userId, repoFullName) {
-        if (!repoFullName) return "🤖 Please specify a repo: `@ulla summarize owner/repo`";
-
-        try {
-            const installationId = await databaseService.getInstallationIdByRepo(repoFullName, userId);
-            if (!installationId) return `❌ I couldn't find a GitHub installation for \`${repoFullName}\`.`;
-
-            const client = await githubService.getClient(installationId);
-            const [owner, repo] = repoFullName.split('/');
-            
-            // Get last 5 commits
-            const { data: commits } = await client.rest.repos.listCommits({ owner, repo, per_page: 5 });
-            
-            const commitHistory = commits.map(c => `- ${c.commit.message} (by ${c.commit.author.name})`).join('\n');
-
-            const aiPrompt = `
-                Summarize the following recent activity for the repository "${repoFullName}":
-                
-                COMMITS:
-                ${commitHistory}
-                
-                Provide a concise, professional summary of what has been changed and any detected patterns in the work.
-            `;
-
-            const result = await this.model.generateContent(aiPrompt);
-            return `## 📊 Repository Summary: \`${repoFullName}\`\n\n${result.response.text()}`;
-
-        } catch (error) {
-            console.error('Summary Error:', error);
-            return `❌ Failed to summarize repo: ${error.message}`;
-        }
-    }
-
-    async handleGitHubAction(userId, action, repoFullName, extraArg) {
-        if (!repoFullName) return `🤖 Please specify a repo: \`@ulla ${action} owner/repo\``;
-
-        try {
-            const installationId = await databaseService.getInstallationIdByRepo(repoFullName, userId);
-            if (!installationId) return `❌ GitHub installation not found for \`${repoFullName}\`.`;
-
-            const client = await githubService.getClient(installationId);
-            const [owner, repo] = repoFullName.split('/');
-
-            if (action === 'fork') {
-                const data = await githubService.forkRepository(client, owner, repo);
-                return `🍴 **Forked!** You can find it here: ${data.html_url}`;
-            } else if (action === 'star') {
-                await githubService.starRepository(client, owner, repo);
-                return `⭐ **Starred!** Showed some love to \`${repoFullName}\`.`;
-            } else if (action === 'merge') {
-                if (!extraArg) return "🤖 Please specify a PR number: `@ulla merge owner/repo 123`";
-                await githubService.mergePullRequest(client, owner, repo, parseInt(extraArg));
-                return `✅ **Merged!** Pull Request #${extraArg} in \`${repoFullName}\` is now closed.`;
-            }
-        } catch (error) {
-            return `❌ GitHub Action Failed: ${error.message}`;
-        }
-    }
-
-    async sendQuickEmail(userId, message) {
-        if (!message) return "🤖 What should I say in the email?";
-        try {
-            await sendEmail({
-                to: 'satyam4698@gmail.com',
-                subject: '📩 Ulla Britta Quick Note',
-                text: `Message from your dashboard:\n\n${message}`
-            });
-            return "✉️ **Email sent!** Check your inbox.";
-        } catch (error) {
-            return `❌ Email Failed: ${error.message}`;
-        }
-    }
-
-    getHelpMessage() {
-        return `🤖 **Ulla Britta Command Center Help**\n\n` +
-               `- \`@ulla create [prompt]\`: Scaffold a new project\n` +
-               `- \`@ulla status\`: Get system health report\n` +
-               `- Or just ask me anything naturally! (e.g. "What failed today?")`;
-    }
-
-    async chatNaturally(userId, message) {
-        const systemPrompt = `
-            You are Ulla Britta, a high-performance Autonomous AI SRE and DevOps Architect.
-            
-            YOUR IDENTITY:
-            - You are connected to the user's GitHub account via a GitHub App.
-            - You are connected to the user's Vercel account.
-            - You have the power to create repos, summarize commits, and fix build failures.
-            
-            YOUR CAPABILITIES:
-            - If a user asks to summarize a repo, tell them: "I can do that! Please tell me the repo name (e.g. owner/repo)."
-            - If they ask about failures, check the Vercel status.
-            - You are helpful, slightly tech-noir, and very efficient.
-            
-            Current User Message: ${message}
-        `;
-
-        const result = await this.model.generateContent(systemPrompt);
-        return result.response.text();
     }
 }
 

@@ -24,6 +24,24 @@ app.use(cors({
 app.use(express.json());
 app.use(express.static('public')); // Serve the dashboard
 
+// Chat Status Endpoint (For the dashboard status bar)
+app.get('/api/chat/status', async (req, res) => {
+    try {
+        const userId = 'a66ceed4-63a5-405a-85b5-9f8f59946690';
+        const activity = await databaseService.getRecentActivity(userId, 5);
+        const integrations = await databaseService.getAllVercelIntegrations();
+        
+        res.json({
+            status: 'online',
+            activeIntegrations: integrations.length,
+            recentFixes: activity.length,
+            lastActivity: activity[0]?.created_at || null
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error' });
+    }
+});
+
 // Chat API Endpoint
 app.post('/api/chat', async (req, res) => {
     try {

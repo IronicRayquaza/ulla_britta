@@ -51,14 +51,14 @@
                 </h1>
                 <p class="text-slate-400 text-sm mt-1">SRE Command Center & Architect</p>
             </div>
-            <div class="flex gap-4">
+            <div id="status-bar" class="flex gap-4">
                 <div class="glass px-4 py-2 rounded-full text-xs flex items-center gap-2">
-                    <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                    Sentinel: Active
+                    <span id="sentinel-pulse" class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                    Sentinel: <span id="sentinel-status">Loading...</span>
                 </div>
-                <div class="glass px-4 py-2 rounded-full text-xs flex items-center gap-2">
+                <div id="activity-badge" class="glass px-4 py-2 rounded-full text-xs flex items-center gap-2">
                     <span class="w-2 h-2 bg-purple-500 rounded-full"></span>
-                    Worker: Standby
+                    Recent Fixes: <span id="recent-fixes">0</span>
                 </div>
             </div>
         </header>
@@ -146,6 +146,20 @@
             input.focus();
         }
 
+        async function updateStatus() {
+            try {
+                const res = await fetch('/api/chat/status');
+                const data = await res.json();
+                document.getElementById('sentinel-status').innerText = data.status === 'online' ? 'Active' : 'Offline';
+                document.getElementById('recent-fixes').innerText = data.recentFixes;
+            } catch (e) {
+                console.error('Status poll failed');
+            }
+        }
+
+        setInterval(updateStatus, 15000); // Poll every 15 seconds
+        updateStatus();
+
         form.onsubmit = async (e) => {
             e.preventDefault();
             const message = input.value.trim();
@@ -162,6 +176,7 @@
                 });
                 const data = await res.json();
                 addMessage('assistant', data.response);
+                updateStatus(); // Update status after an action
             } catch (err) {
                 addMessage('assistant', '❌ Ulla is temporarily disconnected. Check logs.');
             }
