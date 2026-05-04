@@ -15,7 +15,11 @@ import chatService from './services/chat.service.mjs';
 dotenv.config();
 
 const app = express();
-app.use(cors()); // Allow external dashboards to connect
+app.use(cors({
+    origin: ['http://localhost:3000', 'https://ulla-britta.onrender.com'],
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 app.use(express.static('public')); // Serve the dashboard
 
