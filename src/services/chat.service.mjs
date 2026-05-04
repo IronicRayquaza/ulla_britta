@@ -84,8 +84,16 @@ class ChatService {
 
     async executeRepoCreation(userId, prompt, techStack) {
         try {
+            // Clean naming: "Create a music app" -> "music-app"
+            const repoName = prompt
+                .toLowerCase()
+                .replace(/create|a|new|repo|for|my/g, '') // Remove fluff
+                .trim()
+                .replace(/[^a-z0-9]/g, '-') // Replace symbols
+                .replace(/-+/g, '-') // Remove double dashes
+                .slice(0, 20); // Keep it short
+                
             const files = await repoCreatorService.scaffoldProject(prompt, techStack);
-            const repoName = prompt.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 30);
             await repoCreatorService.createAndPush(userId, repoName, prompt, files);
             console.log(`✅ Project ${repoName} created successfully.`);
         } catch (error) {
@@ -112,7 +120,23 @@ class ChatService {
     }
 
     async chatNaturally(userId, message) {
-        const result = await this.model.generateContent(`You are Ulla Britta, a helpful AI DevOps assistant. User says: ${message}`);
+        const systemPrompt = `
+            You are Ulla Britta, a high-performance Autonomous AI SRE and DevOps Architect.
+            
+            YOUR IDENTITY:
+            - You are connected to the user's GitHub account via a GitHub App.
+            - You are connected to the user's Vercel account.
+            - You have the power to create repos, summarize commits, and fix build failures.
+            
+            YOUR CAPABILITIES:
+            - If a user asks to summarize a repo, tell them: "I can do that! Please tell me the repo name (e.g. owner/repo)."
+            - If they ask about failures, check the Vercel status.
+            - You are helpful, slightly tech-noir, and very efficient.
+            
+            Current User Message: ${message}
+        `;
+
+        const result = await this.model.generateContent(systemPrompt);
         return result.response.text();
     }
 }
