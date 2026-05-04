@@ -35,6 +35,16 @@ class ChatService {
             switch (command) {
                 case 'create':
                     return await this.startRepoCreation(userId, args.join(' '));
+                case 'summarize':
+                    return await this.getRepoSummary(userId, args[0]);
+                case 'fork':
+                    return await this.handleGitHubAction(userId, 'fork', args[0]);
+                case 'star':
+                    return await this.handleGitHubAction(userId, 'star', args[0]);
+                case 'merge':
+                    return await this.handleGitHubAction(userId, 'merge', args[0], args[1]);
+                case 'email':
+                    return await this.sendQuickEmail(userId, args.join(' '));
                 case 'status':
                     return await this.getSystemStatus(userId);
                 case 'help':
@@ -110,6 +120,79 @@ class ChatService {
                `- **Active Integrations**: ${activeCount}\n` +
                `- **Worker Tier**: 🦾 Active\n\n` +
                `I am currently monitoring your deployments for failures.`;
+    }
+
+    async getRepoSummary(userId, repoFullName) {
+        if (!repoFullName) return "🤖 Please specify a repo: `@ulla summarize owner/repo`";
+
+        try {
+            const installationId = await databaseService.getInstallationIdByRepo(repoFullName, userId);
+            if (!installationId) return `❌ I couldn't find a GitHub installation for \`${repoFullName}\`.`;
+
+            const client = await githubService.getClient(installationId);
+            const [owner, repo] = repoFullName.split('/');
+            
+            // Get last 5 commits
+            const { data: commits } = await client.rest.repos.listCommits({ owner, repo, per_page: 5 });
+            
+            const commitHistory = commits.map(c => `- ${c.commit.message} (by ${c.commit.author.name})`).join('\n');
+
+            const aiPrompt = `
+                Summarize the following recent activity for the repository "${repoFullName}":
+                
+                COMMITS:
+                ${commitHistory}
+                
+                Provide a concise, professional summary of what has been changed and any detected patterns in the work.
+            `;
+
+            const result = await this.model.generateContent(aiPrompt);
+            return `## 📊 Repository Summary: \`${repoFullName}\`\n\n${result.response.text()}`;
+
+        } catch (error) {
+            console.error('Summary Error:', error);
+            return `❌ Failed to summarize repo: ${error.message}`;
+        }
+    }
+
+    async handleGitHubAction(userId, action, repoFullName, extraArg) {
+        if (!repoFullName) return `🤖 Please specify a repo: \`@ulla ${action} owner/repo\``;
+
+        try {
+            const installationId = await databaseService.getInstallationIdByRepo(repoFullName, userId);
+            if (!installationId) return `❌ GitHub installation not found for \`${repoFullName}\`.`;
+
+            const client = await githubService.getClient(installationId);
+            const [owner, repo] = repoFullName.split('/');
+
+            if (action === 'fork') {
+                const data = await githubService.forkRepository(client, owner, repo);
+                return `🍴 **Forked!** You can find it here: ${data.html_url}`;
+            } else if (action === 'star') {
+                await githubService.starRepository(client, owner, repo);
+                return `⭐ **Starred!** Showed some love to \`${repoFullName}\`.`;
+            } else if (action === 'merge') {
+                if (!extraArg) return "🤖 Please specify a PR number: `@ulla merge owner/repo 123`";
+                await githubService.mergePullRequest(client, owner, repo, parseInt(extraArg));
+                return `✅ **Merged!** Pull Request #${extraArg} in \`${repoFullName}\` is now closed.`;
+            }
+        } catch (error) {
+            return `❌ GitHub Action Failed: ${error.message}`;
+        }
+    }
+
+    async sendQuickEmail(userId, message) {
+        if (!message) return "🤖 What should I say in the email?";
+        try {
+            await sendEmail({
+                to: 'satyam4698@gmail.com',
+                subject: '📩 Ulla Britta Quick Note',
+                text: `Message from your dashboard:\n\n${message}`
+            });
+            return "✉️ **Email sent!** Check your inbox.";
+        } catch (error) {
+            return `❌ Email Failed: ${error.message}`;
+        }
     }
 
     getHelpMessage() {
