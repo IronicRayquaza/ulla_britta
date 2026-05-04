@@ -15,6 +15,7 @@ import chatService from './services/chat.service.mjs';
 dotenv.config();
 
 const app = express();
+app.use(cors()); // Allow external dashboards to connect
 app.use(express.json());
 app.use(express.static('public')); // Serve the dashboard
 
