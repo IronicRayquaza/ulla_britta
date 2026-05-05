@@ -1,5 +1,6 @@
 import { Octokit } from 'octokit';
 import { createAppAuth } from '@octokit/auth-app';
+import crypto from 'crypto';
 
 class GitHubService {
   async getClient(installationId) {
@@ -106,6 +107,38 @@ class GitHubService {
         content: Buffer.from(content).toString('base64'),
         sha
       });
+  }
+
+  async addComment(client, owner, repo, issueNumber, comment) {
+      const { data } = await client.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body: comment });
+      return data;
+  }
+
+  async createBranch(client, owner, repo, branchName, baseBranch) {
+      const { data: baseRef } = await client.rest.git.getRef({ owner, repo, ref: `heads/${baseBranch}` });
+      await client.rest.git.createRef({ owner, repo, ref: `refs/heads/${branchName}`, sha: baseRef.object.sha });
+  }
+
+  async createOrUpdateFile(client, owner, repo, path, message, content, branch) {
+      const { data: fileData } = await client.rest.repos.getContent({ owner, repo, path, ref: branch }).catch(() => ({ data: null }));
+      const sha = fileData ? fileData.sha : undefined;
+      await client.rest.repos.createOrUpdateFileContents({ owner, repo, path, message, content: Buffer.from(content).toString('base64'), sha, branch });
+  }
+
+  async createPullRequest(client, owner, repo, prData) {
+      const { data } = await client.rest.pulls.create({ owner, repo, title: prData.title, body: prData.body, head: prData.head, base: prData.base });
+      return data;
+  }
+
+  verifySignature(payloadString, signature) {
+      if (!signature) return false;
+      const hmac = crypto.createHmac('sha256', process.env.GITHUB_WEBHOOK_SECRET);
+      const digest = 'sha256=' + hmac.update(payloadString).digest('hex');
+      try {
+          return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signature));
+      } catch (e) {
+          return false;
+      }
   }
 }
 
