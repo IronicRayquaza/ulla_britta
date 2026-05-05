@@ -1,150 +1,111 @@
-import { Octokit } from '@octokit/rest';
+import { Octokit } from 'octokit';
 import { createAppAuth } from '@octokit/auth-app';
-import crypto from 'crypto';
-import dotenv from 'dotenv';
-
-dotenv.config();
 
 class GitHubService {
-  constructor() {
-    this.appId = process.env.GITHUB_APP_ID;
-    this.privateKey = process.env.GITHUB_PRIVATE_KEY?.replace(/\\n/g, '\n');
-    this.webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
-  }
-
-  /**
-   * Verifies the authenticity of incoming GitHub Webhooks.
-   */
-  verifySignature(payload, signature) {
-    if (!this.webhookSecret || !signature) return false;
-
-    const hmac = crypto.createHmac('sha256', this.webhookSecret);
-    const digest = 'sha256=' + hmac.update(payload).digest('hex');
-
-    try {
-      return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
-    } catch (e) {
-      return false;
-    }
-  }
-
-  /**
-   * Helper to create a new branch from a base branch.
-   */
-  async createBranch(client, owner, repo, branchName, baseBranch = 'main') {
-    try {
-      const { data: ref } = await client.rest.git.getRef({ owner, repo, ref: `heads/${baseBranch}` });
-      return await client.rest.git.createRef({ owner, repo, ref: `refs/heads/${branchName}`, sha: ref.object.sha });
-    } catch (e) {
-      if (e.message.includes('already exists')) return true; // Fail gracefully
-      throw e;
-    }
-  }
-
-  /**
-   * Helper to create or update file content.
-   */
-  async createOrUpdateFile(client, owner, repo, path, message, content, branch, sha = null) {
-    if (!sha) {
-      try {
-        const { data } = await client.rest.repos.getContent({ owner, repo, path, ref: branch });
-        sha = data.sha;
-      } catch (e) { sha = null; }
-    }
-    return await client.rest.repos.createOrUpdateFileContents({
-      owner, repo, path, message, branch, sha,
-      content: Buffer.from(content).toString('base64')
+  async getClient(installationId) {
+    if (!installationId) throw new Error("Missing Installation ID");
+    return new Octokit({
+      authStrategy: createAppAuth,
+      auth: {
+        appId: process.env.GITHUB_APP_ID,
+        privateKey: process.env.GITHUB_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        installationId: installationId
+      }
     });
   }
 
   /**
-   * Helper to open a Pull Request.
+   * Advanced Search: The Agent's "Eyes".
+   * Implements filters for trending, topic, and language.
    */
-  async createPullRequest(client, owner, repo, { title, body, head, base }) {
-    const { data: pr } = await client.rest.pulls.create({ owner, repo, title, body, head, base });
-    return pr;
-  }
+  async searchRepositories(client, criteria) {
+      const parts = [];
+      if (criteria.topic) parts.push(`topic:${criteria.topic}`);
+      if (criteria.keyword) parts.push(criteria.keyword);
+      if (criteria.minStars) parts.push(`stars:>${criteria.minStars}`);
+      if (criteria.language) parts.push(`language:${criteria.language}`);
+      parts.push('archived:false'); // Only active repos
 
-  /**
-   * Helper to add a comment to an issue or PR.
-   */
-  async addComment(client, owner, repo, issueNumber, body) {
-    return await client.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body });
-  }
+      const query = parts.join(' ');
+      console.log(`🔍 Agent Searching GitHub: ${query}`);
 
-  /**
-   * Creates a new repository on the user's account.
-   */
-  async createRepository(client, name, description = '', isPrivate = false) {
-    try {
-      const { data } = await client.rest.repos.createForAuthenticatedUser({
-        name,
-        description,
-        private: isPrivate,
-        auto_init: true
+      const { data } = await client.rest.search.repos({
+          q: query,
+          sort: 'stars',
+          order: 'desc',
+          per_page: criteria.limit || 10
       });
-      return data;
+
+      return data.items.map(repo => ({
+          full_name: repo.full_name,
+          description: repo.description,
+          stars: repo.stargazers_count,
+          forks: repo.forks_count,
+          language: repo.language,
+          topics: repo.topics || [],
+          pushed_at: repo.pushed_at,
+          url: repo.html_url
+      }));
+  }
+
+  /**
+   * CREATE: Targeted Organization/User Repo Creation.
+   */
+  async createRepository(client, name, description = '', orgName = null, isPrivate = false) {
+    try {
+      if (orgName) {
+          console.log(`🏗️ Creating repo "${name}" in Org "${orgName}"...`);
+          const { data } = await client.rest.repos.createInOrg({
+            org: orgName,
+            name,
+            description,
+            private: isPrivate,
+            auto_init: true
+          });
+          return data;
+      } else {
+          console.log(`🏗️ Creating repo "${name}" in Personal Account...`);
+          const { data } = await client.rest.repos.createForAuthenticatedUser({
+            name,
+            description,
+            private: isPrivate,
+            auto_init: true
+          });
+          return data;
+      }
     } catch (e) {
       if (e.message.includes('already exists')) {
-        // Get existing repo info
-        const { data } = await client.rest.repos.get({
-          owner: 'IronicRayquaza', // Fallback for testing
-          repo: name
-        });
-        return data;
+          const { data } = await client.rest.apps.getAuthenticatedInstallation();
+          const { data: repo } = await client.rest.repos.get({ owner: data.account.login, repo: name });
+          return repo;
       }
       throw e;
     }
   }
 
-  /**
-   * Pushes a file directly to a branch (usually main for new repos).
-   */
-  async pushFile(owner, repo, path, content, message, installationId) {
-    const client = await this.getClient(installationId);
-    return await this.createOrUpdateFile(client, owner, repo, path, message, content, 'main');
-  }
-
-  /**
-   * Forks a repository to the authenticated user's account.
-   */
   async forkRepository(client, owner, repo) {
       const { data } = await client.rest.repos.createFork({ owner, repo });
       return data;
   }
 
-  /**
-   * Stars a repository.
-   */
   async starRepository(client, owner, repo) {
       await client.rest.activity.starRepoForAuthenticatedUser({ owner, repo });
       return true;
   }
 
-  /**
-   * Merges a Pull Request.
-   */
   async mergePullRequest(client, owner, repo, pullNumber) {
       const { data } = await client.rest.pulls.merge({ owner, repo, pull_number: pullNumber });
       return data;
   }
 
-  /**
-   * Returns a full-featured Octokit instance (REST + Actions + Apps).
-   */
-  async getClient(installationId) {
-    if (this.appId && this.privateKey && installationId) {
-      return new Octokit({
-        authStrategy: createAppAuth,
-        auth: {
-          appId: this.appId,
-          privateKey: this.privateKey,
-          installationId: installationId,
-        },
+  async pushFile(client, owner, repo, path, content, message) {
+      const { data: fileData } = await client.rest.repos.getContent({ owner, repo, path }).catch(() => ({ data: null }));
+      const sha = fileData ? fileData.sha : undefined;
+      await client.rest.repos.createOrUpdateFileContents({
+        owner, repo, path, message,
+        content: Buffer.from(content).toString('base64'),
+        sha
       });
-    } else {
-      return new Octokit({ auth: process.env.GITHUB_TOKEN });
-    }
   }
 }
 

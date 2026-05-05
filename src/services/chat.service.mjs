@@ -2,12 +2,11 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import repoCreatorService from './repo-creator.service.mjs';
 import databaseService from './database.service.mjs';
 import githubService from './github.service.mjs';
-import { sendEmail } from './email.service.mjs';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 /**
- * Integrated Chat Agent
+ * Integrated Chat Agent with "Search & Act" Autonomy
  */
 class ChatService {
     constructor() {
@@ -15,143 +14,106 @@ class ChatService {
             {
                 functionDeclarations: [
                     {
-                        name: "get_sentinel_activity",
-                        description: "Fetches recent autonomous fixes and failures from the Supabase memory.",
-                        parameters: { type: "object", properties: {} }
-                    },
-                    {
-                        name: "github_action",
-                        description: "Performs a GitHub action like star, fork, or merge.",
+                        name: "autonomous_discovery",
+                        description: "Finds and acts on repositories based on a broad intent (e.g. 'find and fork 3 AI repos').",
                         parameters: {
                             type: "object",
                             properties: {
-                                action: { type: "string", enum: ["star", "fork", "merge"] },
-                                repoFullName: { type: "string" },
-                                prNumber: { type: "number" }
+                                topic: { type: "string" },
+                                action: { type: "string", enum: ["star", "fork"] },
+                                count: { type: "number" }
                             },
-                            required: ["action", "repoFullName"]
+                            required: ["topic", "action"]
                         }
                     },
                     {
                         name: "create_repository",
-                        description: "Scaffolds and creates a new repo.",
+                        description: "Scaffolds a NEW project.",
                         parameters: {
                             type: "object",
-                            properties: {
-                                prompt: { type: "string" },
-                                techStack: { type: "string" }
-                            },
+                            properties: { prompt: { type: "string" }, techStack: { type: "string" } },
                             required: ["prompt", "techStack"]
-                        }
-                    },
-                    {
-                        name: "send_note",
-                        description: "Sends an email notification.",
-                        parameters: {
-                            type: "object",
-                            properties: { message: { type: "string" } },
-                            required: ["message"]
                         }
                     }
                 ]
             }
         ];
 
-        this.model = genAI.getGenerativeModel({
-            model: 'gemini-3-flash-preview',
-            tools: this.tools
-        });
+        this.model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash', tools: this.tools });
     }
 
     async processMessage(userId, message) {
         try {
-            const activity = await databaseService.getRecentActivity(userId, 5);
-            const chat = this.model.startChat({
-                history: [
-                    {
-                        role: "user",
-                        parts: [{ text: `System Context: You are Ulla Britta. Recent Sentinel Activity: ${JSON.stringify(activity)}` }],
-                    },
-                    {
-                        role: "model",
-                        parts: [{ text: "Understood. I am Ulla Britta, ready to assist with DevOps and SRE tasks." }],
-                    }
-                ]
-            });
+            const context = await databaseService.getRecentActivity(userId, 5);
+            const chat = this.model.startChat();
 
-            let result = await chat.sendMessage(message);
+            const prompt = `You are Ulla Britta. Status: ${JSON.stringify(context)}. User: ${message}`;
+            let result = await chat.sendMessage(prompt);
             let response = result.response;
+            const call = response.functionCalls()?.[0];
 
-            // Handle Tool Calls (Potential crash point fixed)
-            const calls = response.functionCalls();
-
-            if (calls && calls.length > 0) {
-                const call = calls[0];
-                const actionResult = await this.executeTool(userId, call.name, call.args);
-
-                // Final response with tool results
+            if (call) {
+                const toolResult = await this.executeTool(userId, call.name, call.args);
                 const finalResult = await chat.sendMessage([{
-                    functionResponse: {
-                        name: call.name,
-                        response: { content: actionResult }
-                    }
+                    functionResponse: { name: call.name, response: { content: toolResult } }
                 }]);
                 return finalResult.response.text();
             }
 
             return response.text();
         } catch (error) {
-            console.error('🔥 Chat Processing Error:', error);
-            throw error; // Rethrow for index.mjs to catch
+            return `❌ Neural Block: ${error.message}`;
         }
     }
 
     async executeTool(userId, name, args) {
-        try {
-            switch (name) {
-                case 'get_sentinel_activity':
-                    const activity = await databaseService.getRecentActivity(userId, 10);
-                    return JSON.stringify(activity);
+        const fallbackId = '125781221';
+        const client = await githubService.getClient(fallbackId);
 
-                case 'github_action':
-                    const installationId = await databaseService.getInstallationIdByRepo(args.repoFullName, userId);
-                    const client = await githubService.getClient(installationId);
-                    const [owner, repo] = args.repoFullName.split('/');
+        if (name === 'autonomous_discovery') {
+            console.log(`🤖 Agent: Hunting for ${args.topic} repos to ${args.action}...`);
+            
+            // 1. Search
+            const candidates = await githubService.searchRepositories(client, { topic: args.topic, limit: 10 });
+            
+            // 2. Decision (Internal AI Ranking)
+            const decisionModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+            const analysis = await decisionModel.generateContent(`
+                Rank these repos for "${args.topic}". Pick top ${args.count || 3}.
+                Repos: ${JSON.stringify(candidates)}
+                Respond with ONLY a comma-separated list of full_names.
+            `);
+            const selectedNames = analysis.response.text().split(',').map(n => n.trim());
 
-                    if (args.action === 'star') await githubService.starRepository(client, owner, repo);
-                    if (args.action === 'fork') await githubService.forkRepository(client, owner, repo);
-                    if (args.action === 'merge') await githubService.mergePullRequest(client, owner, repo, args.prNumber);
-
-                    return `Action ${args.action} on ${args.repoFullName} completed successfully.`;
-
-                case 'create_repository':
-                    this.executeRepoCreation(userId, args.prompt, args.techStack);
-                    return "Scaffolding started. Email notification will follow.";
-
-                case 'send_note':
-                    await sendEmail({
-                        to: 'satyam4698@gmail.com',
-                        subject: '📩 Ulla Britta Note',
-                        text: args.message
-                    });
-                    return "Email dispatched.";
-
-                default:
-                    return "Error: Unknown tool.";
+            // 3. Act
+            for (const fullName of selectedNames) {
+                const [owner, repo] = fullName.split('/');
+                if (args.action === 'star') await githubService.starRepository(client, owner, repo);
+                if (args.action === 'fork') await githubService.forkRepository(client, owner, repo);
+                console.log(`✅ ${args.action}ed ${fullName}`);
             }
-        } catch (e) {
-            console.error(`❌ Tool execution failed (${name}):`, e);
-            return `Error executing ${name}: ${e.message}`;
+
+            return `I found and ${args.action}ed ${selectedNames.length} projects: ${selectedNames.join(', ')}`;
+        }
+
+        if (name === 'create_repository') {
+            this.executeRepoCreation(userId, args.prompt, args.techStack);
+            return "Architecture initiated. Check GitHub in a moment.";
         }
     }
 
     async executeRepoCreation(userId, prompt, techStack) {
         try {
+            const fallbackId = '125781221';
+            const client = await githubService.getClient(fallbackId);
             const repoName = prompt.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20);
+            const repo = await githubService.createRepository(client, repoName, prompt, 'Ulla-Labs'); // Using your Org
             const files = await repoCreatorService.scaffoldProject(prompt, techStack);
-            await repoCreatorService.createAndPush(userId, repoName, prompt, files);
+            for (const file of files) {
+                await githubService.pushFile(client, 'Ulla-Labs', repo.name, file.path, file.content, '🚀 Initial Scaffold');
+            }
         } catch (error) {
-            console.error('❌ Agent Background Repo Creation Failed:', error);
+            console.error('❌ Repo Creation Failed:', error);
         }
     }
 }

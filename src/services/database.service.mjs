@@ -241,6 +241,9 @@ class DatabaseService {
    * Fetches recent activity for a user (fixes and deployments).
    */
   async getRecentActivity(userId, limit = 10) {
+    if (!this.client) return [];
+    
+    // We target processed_deployments as the primary source of truth for activity
     const { data, error } = await this.client
       .from('processed_deployments')
       .select('*')
@@ -249,10 +252,10 @@ class DatabaseService {
       .limit(limit);
 
     if (error) {
-        console.error('❌ Error fetching activity:', error);
+        console.error('❌ DB: Activity Query Failed:', error.message);
         return [];
     }
-    return data;
+    return data || [];
   }
 }
 
