@@ -28,10 +28,13 @@ class ChatService {
                     },
                     {
                         name: "create_repository",
-                        description: "Scaffolds a NEW project.",
+                        description: "Creates a NEW repository. Use this for scaffolding new projects.",
                         parameters: {
                             type: "object",
-                            properties: { prompt: { type: "string" }, techStack: { type: "string" } },
+                            properties: {
+                                prompt: { type: "string" },
+                                techStack: { type: "string" }
+                            },
                             required: ["prompt", "techStack"]
                         }
                     }
@@ -39,7 +42,11 @@ class ChatService {
             }
         ];
 
-        this.model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash', tools: this.tools });
+        // LOCKED TO GEMINI 3 FLASH PREVIEW
+        this.model = genAI.getGenerativeModel({ 
+            model: 'gemini-3-flash-preview',
+            tools: this.tools
+        });
     }
 
     async processMessage(userId, message) {
@@ -47,73 +54,87 @@ class ChatService {
             const context = await databaseService.getRecentActivity(userId, 5);
             const chat = this.model.startChat();
 
-            const prompt = `You are Ulla Britta. Status: ${JSON.stringify(context)}. User: ${message}`;
-            let result = await chat.sendMessage(prompt);
-            let response = result.response;
-            const call = response.functionCalls()?.[0];
+            const systemInstruction = `
+                You are Ulla Britta, a Smart SRE Agent. 
+                YOU HAVE AUTONOMY. If a user asks to "fork some repos" or "find something," use the 'search_github' tool, analyze the results, and then use 'github_action' to execute. 
+                DO NOT BE DEPENDENT. If you can find the info yourself, do it.
+                
+                Current Status: ${JSON.stringify(context)}
+            `;
 
-            if (call) {
-                const toolResult = await this.executeTool(userId, call.name, call.args);
-                const finalResult = await chat.sendMessage([{
-                    functionResponse: { name: call.name, response: { content: toolResult } }
-                }]);
+            let result = await chat.sendMessage([
+                { text: systemInstruction },
+                { text: message }
+            ]);
+
+            let response = result.response;
+            const calls = response.functionCalls();
+            
+            if (calls && calls.length > 0) {
+                const toolResults = [];
+                for (const call of calls) {
+                    const actionResult = await this.executeTool(userId, call.name, call.args);
+                    toolResults.push({
+                        functionResponse: {
+                            name: call.name,
+                            response: { content: actionResult }
+                        }
+                    });
+                }
+                
+                const finalResult = await chat.sendMessage(toolResults);
                 return finalResult.response.text();
             }
 
             return response.text();
         } catch (error) {
-            return `❌ Neural Block: ${error.message}`;
+            console.error('🔥 Chat Error:', error);
+            return `❌ I hit a neural block: ${error.message}`;
         }
     }
 
     async executeTool(userId, name, args) {
-        const fallbackId = '125781221';
-        const client = await githubService.getClient(fallbackId);
+        try {
+            const fallbackId = '125781221'; 
+            const client = await githubService.getClient(fallbackId);
 
-        if (name === 'autonomous_discovery') {
-            console.log(`🤖 Agent: Hunting for ${args.topic} repos to ${args.action}...`);
-            
-            // 1. Search
-            const candidates = await githubService.searchRepositories(client, { topic: args.topic, limit: 10 });
-            
-            // 2. Decision (Internal AI Ranking)
-            const decisionModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-            const analysis = await decisionModel.generateContent(`
-                Rank these repos for "${args.topic}". Pick top ${args.count || 3}.
-                Repos: ${JSON.stringify(candidates)}
-                Respond with ONLY a comma-separated list of full_names.
-            `);
-            const selectedNames = analysis.response.text().split(',').map(n => n.trim());
+            switch (name) {
+                case 'search_github':
+                    return await githubService.searchRepositories(client, args.query, args.limit);
+                
+                case 'github_action':
+                    const [owner, repo] = args.repoFullName.split('/');
+                    if (args.action === 'star') await githubService.starRepository(client, owner, repo);
+                    if (args.action === 'fork') await githubService.forkRepository(client, owner, repo);
+                    if (args.action === 'merge') await githubService.mergePullRequest(client, owner, repo, args.prNumber);
+                    return `Successfully ${args.action}ed ${args.repoFullName}`;
 
-            // 3. Act
-            for (const fullName of selectedNames) {
-                const [owner, repo] = fullName.split('/');
-                if (args.action === 'star') await githubService.starRepository(client, owner, repo);
-                if (args.action === 'fork') await githubService.forkRepository(client, owner, repo);
-                console.log(`✅ ${args.action}ed ${fullName}`);
+                case 'create_repository':
+                    this.executeRepoCreation(userId, args.prompt, args.techStack);
+                    return "Architecture initiated. Check GitHub in a moment.";
+
+                default:
+                    return "Error: Unknown tool.";
             }
-
-            return `I found and ${args.action}ed ${selectedNames.length} projects: ${selectedNames.join(', ')}`;
-        }
-
-        if (name === 'create_repository') {
-            this.executeRepoCreation(userId, args.prompt, args.techStack);
-            return "Architecture initiated. Check GitHub in a moment.";
+        } catch (e) {
+            return `Error: ${e.message}`;
         }
     }
 
     async executeRepoCreation(userId, prompt, techStack) {
         try {
-            const fallbackId = '125781221';
+            const fallbackId = '125781221'; 
             const client = await githubService.getClient(fallbackId);
             const repoName = prompt.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20);
-            const repo = await githubService.createRepository(client, repoName, prompt, 'Ulla-Labs'); // Using your Org
+            
+            const repo = await githubService.createRepository(client, repoName, prompt);
             const files = await repoCreatorService.scaffoldProject(prompt, techStack);
+            
             for (const file of files) {
-                await githubService.pushFile(client, 'Ulla-Labs', repo.name, file.path, file.content, '🚀 Initial Scaffold');
+                await githubService.pushFile(client, repo.owner.login, repo.name, file.path, file.content, '🚀 Initial Scaffold');
             }
         } catch (error) {
-            console.error('❌ Repo Creation Failed:', error);
+            console.error('❌ Async Repo Creation Failed:', error);
         }
     }
 }
