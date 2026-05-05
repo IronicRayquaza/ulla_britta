@@ -248,7 +248,6 @@ class DatabaseService {
       .from('processed_deployments')
       .select('*')
       .eq('user_id', userId)
-      .order('created_at', { ascending: false })
       .limit(limit);
 
     if (error) {

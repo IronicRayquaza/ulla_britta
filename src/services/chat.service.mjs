@@ -56,7 +56,7 @@ class ChatService {
 
             const systemInstruction = `
                 You are Ulla Britta, a Smart SRE Agent. 
-                YOU HAVE AUTONOMY. If a user asks to "fork some repos" or "find something," use the 'search_github' tool, analyze the results, and then use 'github_action' to execute. 
+                YOU HAVE AUTONOMY. If a user asks to "fork some repos" or "find something," use the 'autonomous_discovery' tool to search, analyze, and act.
                 DO NOT BE DEPENDENT. If you can find the info yourself, do it.
                 
                 Current Status: ${JSON.stringify(context)}
@@ -99,15 +99,30 @@ class ChatService {
             const client = await githubService.getClient(fallbackId);
 
             switch (name) {
-                case 'search_github':
-                    return await githubService.searchRepositories(client, args.query, args.limit);
-                
-                case 'github_action':
-                    const [owner, repo] = args.repoFullName.split('/');
-                    if (args.action === 'star') await githubService.starRepository(client, owner, repo);
-                    if (args.action === 'fork') await githubService.forkRepository(client, owner, repo);
-                    if (args.action === 'merge') await githubService.mergePullRequest(client, owner, repo, args.prNumber);
-                    return `Successfully ${args.action}ed ${args.repoFullName}`;
+                case 'autonomous_discovery':
+                    console.log(`🤖 Agent: Hunting for ${args.topic} repos to ${args.action}...`);
+                    
+                    // 1. Search
+                    const candidates = await githubService.searchRepositories(client, { topic: args.topic, limit: 10 });
+                    
+                    // 2. Decision
+                    const decisionModel = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+                    const analysis = await decisionModel.generateContent(`
+                        Rank these repos for "${args.topic}". Pick top ${args.count || 3}.
+                        Repos: ${JSON.stringify(candidates)}
+                        Respond with ONLY a comma-separated list of full_names.
+                    `);
+                    const selectedNames = analysis.response.text().split(',').map(n => n.trim());
+
+                    // 3. Act
+                    for (const fullName of selectedNames) {
+                        const [owner, repo] = fullName.split('/');
+                        if (args.action === 'star') await githubService.starRepository(client, owner, repo);
+                        if (args.action === 'fork') await githubService.forkRepository(client, owner, repo);
+                        console.log(`✅ ${args.action}ed ${fullName}`);
+                    }
+
+                    return `I found and ${args.action}ed ${selectedNames.length} projects: ${selectedNames.join(', ')}`;
 
                 case 'create_repository':
                     this.executeRepoCreation(userId, args.prompt, args.techStack);
