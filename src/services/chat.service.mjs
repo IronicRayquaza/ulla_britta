@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import repoCreatorService from './repo-creator.service.mjs';
 import databaseService from './database.service.mjs';
 import githubService from './github.service.mjs';
+import { sendEmail } from './email.service.mjs';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -36,6 +37,18 @@ class ChatService {
                                 techStack: { type: "string" }
                             },
                             required: ["prompt", "techStack"]
+                        }
+                    }
+                    },
+                    {
+                        name: "summarize_latest_commit",
+                        description: "Summarizes the latest commit for a given repository and emails the report.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                repoName: { type: "string", description: "The name of the repository (e.g. ulla-labs/my-repo or just my-repo)" }
+                            },
+                            required: ["repoName"]
                         }
                     }
                 ]
@@ -127,6 +140,9 @@ class ChatService {
                     this.executeRepoCreation(userId, args.prompt, args.techStack);
                     return "Architecture initiated. Check GitHub in a moment.";
 
+                case 'summarize_latest_commit':
+                    return await this.executeSummarizeCommit(args.repoName);
+
                 default:
                     return "Error: Unknown tool.";
             }
@@ -148,6 +164,42 @@ class ChatService {
             }
         } catch (error) {
             console.error('❌ Async Repo Creation Failed:', error);
+        }
+    }
+
+    async executeSummarizeCommit(repoFullName) {
+        try {
+            if (!repoFullName.includes('/')) {
+                repoFullName = `ulla-labs/${repoFullName}`;
+            }
+            const [owner, repo] = repoFullName.split('/');
+            const client = await githubService.getClientForOrg('ulla-labs');
+
+            const { data: commits } = await client.rest.repos.listCommits({ owner, repo, per_page: 1 });
+            if (!commits || commits.length === 0) return "No commits found in this repository.";
+            const latestCommit = commits[0];
+
+            const { data: commitDetail } = await client.rest.repos.getCommit({ owner, repo, ref: latestCommit.sha });
+
+            const summarizeModel = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+            const prompt = `
+                Analyze this commit and generate a professional Markdown report.
+                Message: ${commitDetail.commit.message}
+                Author: ${commitDetail.commit.author.name}
+                Files changed: ${commitDetail.files.map(f => f.filename).join(', ')}
+                Diff snippet: ${commitDetail.files[0]?.patch?.substring(0, 500) || 'No diff available'}
+                
+                Make the report detailed and insightful.
+            `;
+            const analysis = await summarizeModel.generateContent(prompt);
+            const reportMarkdown = analysis.response.text();
+
+            await sendEmail(reportMarkdown, repoFullName);
+
+            return "Success: The latest commit has been summarized and the report was emailed successfully.";
+        } catch (error) {
+            console.error('❌ Summarize Commit Failed:', error);
+            return `Failed to summarize commit: ${error.message}`;
         }
     }
 }
