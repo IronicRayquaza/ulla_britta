@@ -143,8 +143,8 @@ class ChatService {
             const repo = await githubService.createRepository(client, repoName, prompt, 'ulla-labs');
             const files = await repoCreatorService.scaffoldProject(prompt, techStack);
             
-            for (const file of files) {
-                await githubService.pushFile(client, repo.owner.login, repo.name, file.path, file.content, '🚀 Initial Scaffold');
+            for (const [path, content] of Object.entries(files)) {
+                await githubService.pushFile(client, repo.owner.login, repo.name, path, content, '🚀 Initial Scaffold');
             }
         } catch (error) {
             console.error('❌ Async Repo Creation Failed:', error);
