@@ -95,8 +95,7 @@ class ChatService {
 
     async executeTool(userId, name, args) {
         try {
-            const fallbackId = '125781221'; 
-            const client = await githubService.getClient(fallbackId);
+            const client = await githubService.getClientForOrg('ulla-labs');
 
             switch (name) {
                 case 'autonomous_discovery':
@@ -138,8 +137,7 @@ class ChatService {
 
     async executeRepoCreation(userId, prompt, techStack) {
         try {
-            const fallbackId = '125781221'; 
-            const client = await githubService.getClient(fallbackId);
+            const client = await githubService.getClientForOrg('ulla-labs');
             const repoName = prompt.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20);
             
             const repo = await githubService.createRepository(client, repoName, prompt, 'ulla-labs');

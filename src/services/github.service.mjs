@@ -15,6 +15,18 @@ class GitHubService {
     });
   }
 
+  async getClientForOrg(orgName) {
+    const appOctokit = new Octokit({
+      authStrategy: createAppAuth,
+      auth: {
+        appId: process.env.GITHUB_APP_ID,
+        privateKey: process.env.GITHUB_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      }
+    });
+    const { data } = await appOctokit.rest.apps.getOrgInstallation({ org: orgName });
+    return this.getClient(data.id);
+  }
+
   /**
    * Advanced Search: The Agent's "Eyes".
    * Implements filters for trending, topic, and language.
