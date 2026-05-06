@@ -3,6 +3,7 @@ import repoCreatorService from './repo-creator.service.mjs';
 import databaseService from './database.service.mjs';
 import githubService from './github.service.mjs';
 import { sendEmail } from './email.service.mjs';
+import advancedWorkflowsService from './advanced-workflows.service.mjs';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -38,7 +39,6 @@ class ChatService {
                             },
                             required: ["prompt", "techStack"]
                         }
-                    }
                     },
                     {
                         name: "summarize_latest_commit",
@@ -49,6 +49,86 @@ class ChatService {
                                 repoName: { type: "string", description: "The name of the repository (e.g. ulla-labs/my-repo or just my-repo)" }
                             },
                             required: ["repoName"]
+                        }
+                    },
+                    {
+                        name: "review_pull_request",
+                        description: "Analyzes a PR diff and posts inline comments or a general review.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                repoName: { type: "string" },
+                                prNumber: { type: "number" }
+                            },
+                            required: ["repoName", "prNumber"]
+                        }
+                    },
+                    {
+                        name: "update_dependencies",
+                        description: "Checks package.json for outdated dependencies and provides a summary.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                repoName: { type: "string" }
+                            },
+                            required: ["repoName"]
+                        }
+                    },
+                    {
+                        name: "check_repo_health",
+                        description: "Calculates a health score based on basic metrics and emails the report.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                repoName: { type: "string" }
+                            },
+                            required: ["repoName"]
+                        }
+                    },
+                    {
+                        name: "generate_changelog",
+                        description: "Generates a changelog from recent commits for a given repository.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                repoName: { type: "string" }
+                            },
+                            required: ["repoName"]
+                        }
+                    },
+                    {
+                        name: "clean_stale_issues",
+                        description: "Finds issues older than 30 days and posts a warning comment.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                repoName: { type: "string" }
+                            },
+                            required: ["repoName"]
+                        }
+                    },
+                    {
+                        name: "resolve_merge_conflicts",
+                        description: "Analyzes PRs with dirty states and attempts to resolve conflicts using Gemini.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                repoName: { type: "string" },
+                                prNumber: { type: "number" }
+                            },
+                            required: ["repoName", "prNumber"]
+                        }
+                    },
+                    {
+                        name: "build_feature",
+                        description: "Triggers Ulla Britta to build a new feature or fix on an existing repository.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                repoName: { type: "string", description: "The full repository name, e.g. ulla-labs/my-repo" },
+                                featureDescription: { type: "string", description: "Detailed description of what to build" }
+                            },
+                            required: ["repoName", "featureDescription"]
                         }
                     }
                 ]
@@ -150,6 +230,40 @@ class ChatService {
 
                 case 'summarize_latest_commit':
                     return await this.executeSummarizeCommit(args.repoName);
+
+                case 'review_pull_request':
+                    return await advancedWorkflowsService.reviewPullRequest(args.repoName, args.prNumber);
+
+                case 'update_dependencies':
+                    return await advancedWorkflowsService.checkDependencies(args.repoName);
+
+                case 'check_repo_health':
+                    return await advancedWorkflowsService.checkRepoHealth(args.repoName);
+
+                case 'generate_changelog':
+                    return await advancedWorkflowsService.generateChangelog(args.repoName);
+
+                case 'clean_stale_issues':
+                    return await advancedWorkflowsService.cleanStaleIssues(args.repoName);
+
+                case 'resolve_merge_conflicts':
+                    return await advancedWorkflowsService.resolveMergeConflicts(args.repoName, args.prNumber);
+
+                case 'build_feature':
+                    try {
+                        const [fOwner, fRepo] = args.repoName.split('/');
+                        const fClient = await githubService.getClientForOrg(fOwner);
+                        const issue = await fClient.rest.issues.create({
+                            owner: fOwner,
+                            repo: fRepo,
+                            title: `🚀 Auto-Build: ${args.featureDescription.substring(0, 50)}`,
+                            body: `**Requested via Ulla Chat Interface:**\n\n${args.featureDescription}\n\n*(The Sentinel brain will pick this up automatically)*`,
+                            labels: ['ulla-build']
+                        });
+                        return `I have initiated the build process! I created Issue #${issue.data.number} on ${args.repoName} and my Sentinel brain is already analyzing the codebase in the background. I will let you know on the GitHub issue when the PR is ready or if I need routing instructions!`;
+                    } catch (e) {
+                        return `Failed to initiate feature build: ${e.message}`;
+                    }
 
                 default:
                     return "Error: Unknown tool.";

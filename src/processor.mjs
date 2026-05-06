@@ -9,6 +9,7 @@ import logger from './services/logger.service.mjs';
 import vercelService from './services/vercel.service.mjs';
 import repoAnalyzer from './services/repo-analyzer.service.mjs';
 import codeGenerator from './services/code-generator.service.mjs';
+import advancedWorkflowsService from './services/advanced-workflows.service.mjs';
 import path from 'path';
 
 export async function processEvent(event) {
@@ -153,17 +154,75 @@ export async function processEvent(event) {
                 await githubService.createOrUpdateFile(client, payload.owner, payload.repo, f.path, `[ULLA] Update ${f.path}`, modified, branchName);
             }
 
-            const pr = await githubService.createPullRequest(client, payload.owner, payload.repo, {
-                title: `🤖 Ulla Build: ${payload.issue_title}`,
-                body: `## Autonomous Implementation by Ulla Britta\n\nCloses #${payload.issue_number}\n\n**Approach:** ${plan.approach}\n\n**Confidence:** ${plan.confidence}%`,
-                head: branchName,
-                base: payload.branch
-            });
+            const { data: repoData } = await client.rest.repos.get({ owner: payload.owner, repo: payload.repo });
+            
+            if (repoData.fork) {
+                const upstreamFullName = repoData.parent.full_name;
+                const hiddenData = JSON.stringify({ baseBranch: payload.branch, headBranch: branchName, upstream: upstreamFullName, issueTitle: payload.issue_title, approach: plan.approach, confidence: plan.confidence });
+                
+                await githubService.addComment(client, payload.owner, payload.repo, payload.issue_number, 
+`✅ I've built this feature and pushed it to the branch \`${branchName}\`!
 
-            await githubService.addComment(client, payload.owner, payload.repo, payload.issue_number, `✅ I've built this feature! See Pull Request #${pr.number} 🚀`);
-            await logger.success(`Feature Build Complete! Opened PR #${pr.number}`);
+Since this repository is a fork of **${upstreamFullName}**, where would you like me to open the Pull Request?
+- 🔄 **Reply with \`/pr upstream\`** to open it against the original parent repository.
+- 🏠 **Reply with \`/pr local\`** to open it against this fork's \`main\` branch.
+
+*(I'll wait for your command! 🦾)* <!-- ulla_pr_data:${hiddenData} -->`
+                );
+                await logger.success(`Feature Built on Fork! Waiting for user routing command...`);
+            } else {
+                const pr = await githubService.createPullRequest(client, payload.owner, payload.repo, {
+                    title: `🤖 Ulla Build: ${payload.issue_title}`,
+                    body: `## Autonomous Implementation by Ulla Britta\n\nCloses #${payload.issue_number}\n\n**Approach:** ${plan.approach}\n\n**Confidence:** ${plan.confidence}%`,
+                    head: branchName,
+                    base: payload.branch
+                });
+                await githubService.addComment(client, payload.owner, payload.repo, payload.issue_number, `✅ I've built this feature! See Pull Request #${pr.number} 🚀`);
+                await logger.success(`Feature Build Complete! Opened PR #${pr.number}`);
+            }
             
             await repoAnalyzer.cleanup(repoPath);
+        }
+
+        else if (type === 'route_pr') {
+            const commentBody = payload.comment.body.trim();
+            const client = await githubService.getClientForOrg(payload.repository.owner.login);
+            
+            const { data: comments } = await client.rest.issues.listComments({
+                owner: payload.repository.owner.login,
+                repo: payload.repository.name,
+                issue_number: payload.issue.number
+            });
+            
+            const ullaComment = comments.reverse().find(c => c.body.includes('<!-- ulla_pr_data:'));
+            if (!ullaComment) return;
+
+            const match = ullaComment.body.match(/<!-- ulla_pr_data:(.*?) -->/);
+            if (!match) return;
+
+            const prData = JSON.parse(match[1]);
+            const isUpstream = commentBody === '/pr upstream';
+
+            let targetOwner = payload.repository.owner.login;
+            let targetRepo = payload.repository.name;
+            let headBranch = prData.headBranch;
+
+            if (isUpstream) {
+                const [upOwner, upRepo] = prData.upstream.split('/');
+                targetOwner = upOwner;
+                targetRepo = upRepo;
+                headBranch = `${payload.repository.owner.login}:${prData.headBranch}`;
+            }
+
+            const pr = await githubService.createPullRequest(client, targetOwner, targetRepo, {
+                title: `🤖 Ulla Build: ${prData.issueTitle}`,
+                body: `## Autonomous Implementation by Ulla Britta\n\n**Approach:** ${prData.approach}\n\n**Confidence:** ${prData.confidence}%`,
+                head: headBranch,
+                base: isUpstream ? 'main' : prData.baseBranch
+            });
+
+            await githubService.addComment(client, payload.repository.owner.login, payload.repository.name, payload.issue.number, `✅ I've opened the Pull Request exactly where you asked! See PR #${pr.number} on ${targetOwner}/${targetRepo} 🚀`);
+            await logger.success(`Routed PR to ${isUpstream ? 'Upstream' : 'Local'}!`);
         }
 
         else if (type === 'workflow_run' || type === 'check_run') {
@@ -183,6 +242,37 @@ export async function processEvent(event) {
                 await sendEmail(result.report_markdown, repository);
                 await logger.success(`Auto-fix applied and surgical report sent. 🩹`);
             }
+        }
+        
+        else if (type === 'review_pull_request') {
+            await logger.info(`🔍 Reviewing PR #${payload.pull_request.number}...`);
+            await advancedWorkflowsService.reviewPullRequest(repository, payload.pull_request.number);
+            await logger.success(`PR #${payload.pull_request.number} reviewed.`);
+        }
+        else if (type === 'generate_changelog') {
+            await logger.info(`📝 Generating changelog for release...`);
+            const log = await advancedWorkflowsService.generateChangelog(repository);
+            await logger.success(`Changelog generated.`);
+        }
+        else if (type === 'update_dependencies') {
+            await logger.info(`📦 Checking dependencies for ${repository}...`);
+            await advancedWorkflowsService.checkDependencies(repository);
+            await logger.success(`Dependency check complete.`);
+        }
+        else if (type === 'check_repo_health') {
+            await logger.info(`🏥 Running health check for ${repository}...`);
+            await advancedWorkflowsService.checkRepoHealth(repository);
+            await logger.success(`Health check complete.`);
+        }
+        else if (type === 'clean_stale_issues') {
+            await logger.info(`🧹 Sweeping stale issues for ${repository}...`);
+            await advancedWorkflowsService.cleanStaleIssues(repository);
+            await logger.success(`Stale issues swept.`);
+        }
+        else if (type === 'resolve_merge_conflicts') {
+            await logger.info(`⚔️ Analyzing PR #${payload.prNumber} for merge conflicts...`);
+            await advancedWorkflowsService.resolveMergeConflicts(repository, payload.prNumber);
+            await logger.success(`Conflict analysis complete.`);
         }
     } catch (error) {
         await logger.error(`❌ Agent Error: ${error.message}`);

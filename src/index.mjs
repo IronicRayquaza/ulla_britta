@@ -168,8 +168,51 @@ app.post('/webhook', async (req, res) => {
         }
     }
 
+    // Special Handling for PR Routing Commands
+    if (eventType === 'issue_comment' && payload.action === 'created') {
+        const commentBody = payload.comment.body.trim();
+        if (commentBody === '/pr upstream' || commentBody === '/pr local') {
+            await enqueueTask('route_pr', payload);
+        }
+    }
+
+    // Special Handling for PR Reviews
+    if (eventType === 'pull_request' && (payload.action === 'opened' || payload.action === 'synchronize')) {
+        await enqueueTask('review_pull_request', payload);
+    }
+
+    // Special Handling for Releases
+    if (eventType === 'release' && payload.action === 'published') {
+        await enqueueTask('generate_changelog', payload);
+    }
+
     res.status(202).send({ taskId });
 });
+
+// ==========================================
+// BACKGROUND CRON JOBS (Sentinel Loop)
+// ==========================================
+setInterval(async () => {
+    try {
+        console.log("⏰ Running Daily Sentinel Maintenance...");
+        const integrations = await databaseService.getAllIntegrations();
+        for (const integration of integrations) {
+            const { github_username } = integration;
+            const client = await githubService.getClientForOrg(github_username);
+            const { data: repos } = await client.rest.repos.listForAuthenticatedUser();
+            
+            for (const repo of repos) {
+                const repoFullName = repo.full_name;
+                // Enqueue the daily maintenance tasks
+                await enqueueTask('update_dependencies', { repository: { full_name: repoFullName } });
+                await enqueueTask('check_repo_health', { repository: { full_name: repoFullName } });
+                await enqueueTask('clean_stale_issues', { repository: { full_name: repoFullName } });
+            }
+        }
+    } catch (e) {
+        console.error("❌ Daily Maintenance Failed:", e.message);
+    }
+}, 24 * 60 * 60 * 1000); // Run every 24 hours
 
 // Deployment Approval Endpoint (One-Click Trigger)
 app.get('/approve-deployment', async (req, res) => {
