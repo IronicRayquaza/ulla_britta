@@ -126,15 +126,23 @@ class ChatService {
                     `);
                     const selectedNames = analysis.response.text().split(',').map(n => n.trim());
 
-                    // 3. Act
+                    // 3. Act & Summarize
+                    let summaryTable = `I found and ${args.action}ed ${selectedNames.length} projects. Here is the summary:\n\n| Repository | Stars ⭐ | Forks 🍴 | Description |\n| :--- | :--- | :--- | :--- |\n`;
+
                     for (const fullName of selectedNames) {
+                        const repoData = candidates.find(r => r.full_name === fullName);
                         const [owner, repo] = fullName.split('/');
                         if (args.action === 'star') await githubService.starRepository(client, owner, repo);
                         if (args.action === 'fork') await githubService.forkRepository(client, owner, repo);
                         console.log(`✅ ${args.action}ed ${fullName}`);
+
+                        if (repoData) {
+                            const desc = (repoData.description || 'No description').replace(/\|/g, '-').replace(/\n/g, ' ').substring(0, 80);
+                            summaryTable += `| [${fullName}](${repoData.url}) | ${repoData.stars} | ${repoData.forks} | ${desc}... |\n`;
+                        }
                     }
 
-                    return `I found and ${args.action}ed ${selectedNames.length} projects: ${selectedNames.join(', ')}`;
+                    return summaryTable;
 
                 case 'create_repository':
                     this.executeRepoCreation(userId, args.prompt, args.techStack);
