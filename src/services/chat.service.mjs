@@ -142,7 +142,7 @@ class ChatService {
             const client = await githubService.getClient(fallbackId);
             const repoName = prompt.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20);
             
-            const repo = await githubService.createRepository(client, repoName, prompt);
+            const repo = await githubService.createRepository(client, repoName, prompt, 'ulla-labs');
             const files = await repoCreatorService.scaffoldProject(prompt, techStack);
             
             for (const file of files) {
