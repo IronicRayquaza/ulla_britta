@@ -42,6 +42,7 @@ class DeploymentService {
         
         try {
             console.log(`🚀 Initiating Vercel Setup for ${repoFullName}...`);
+            const { data: repoInfo } = await client.rest.repos.get({ owner, repo });
             
             // 0. Detect Framework
             const { data: tree } = await client.rest.git.getTree({ owner, repo, tree_sha: repoInfo.default_branch || 'main', recursive: true });
