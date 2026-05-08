@@ -4,6 +4,7 @@ import databaseService from './database.service.mjs';
 import githubService from './github.service.mjs';
 import { sendEmail } from './email.service.mjs';
 import advancedWorkflowsService from './advanced-workflows.service.mjs';
+import logger from './logger.service.mjs';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -130,6 +131,33 @@ class ChatService {
                             },
                             required: ["repoName", "featureDescription"]
                         }
+                    },
+                    {
+                        name: "get_repository_readme",
+                        description: "Fetches the README content of a repository for deep analysis and summarization.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                repoName: { type: "string", description: "The full repository name, e.g. ulla-labs/my-repo" }
+                            },
+                            required: ["repoName"]
+                        }
+                    },
+                    {
+                        name: "list_user_repositories",
+                        description: "Lists all repositories in the user's account with their last push date for cleanup analysis.",
+                        parameters: { type: "object", properties: {} }
+                    },
+                    {
+                        name: "delete_repository",
+                        description: "DELETES a repository. This is permanent. USE WITH EXTREME CAUTION.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                repoName: { type: "string", description: "The full repository name, e.g. ulla-labs/my-repo" }
+                            },
+                            required: ["repoName"]
+                        }
                     }
                 ]
             }
@@ -225,8 +253,9 @@ class ChatService {
                     return summaryTable;
 
                 case 'create_repository':
+                    logger.setContext(userId, null, 'chat-tool');
                     this.executeRepoCreation(userId, args.prompt, args.techStack);
-                    return "Architecture initiated. Check GitHub in a moment.";
+                    return "Architecture initiated. I am scaffolding the project now... You can watch the real-time logs in the system panel.";
 
                 case 'summarize_latest_commit':
                     return await this.executeSummarizeCommit(args.repoName);
@@ -265,6 +294,33 @@ class ChatService {
                         return `Failed to initiate feature build: ${e.message}`;
                     }
 
+                case 'get_repository_readme':
+                    try {
+                        const [rOwner, rRepo] = args.repoName.split('/');
+                        const rClient = await githubService.getClientForOrg(rOwner);
+                        return await githubService.getReadme(rClient, rOwner, rRepo);
+                    } catch (e) {
+                        return `Failed to fetch README: ${e.message}`;
+                    }
+
+                case 'list_user_repositories':
+                    try {
+                        const repos = await githubService.listUserRepos(client);
+                        return JSON.stringify(repos);
+                    } catch (e) {
+                        return `Failed to list repositories: ${e.message}`;
+                    }
+
+                case 'delete_repository':
+                    try {
+                        const [dOwner, dRepo] = args.repoName.split('/');
+                        const dClient = await githubService.getClientForOrg(dOwner);
+                        await githubService.deleteRepository(dClient, dOwner, dRepo);
+                        return `Successfully DELETED repository: ${args.repoName}`;
+                    } catch (e) {
+                        return `Failed to delete repository: ${e.message}`;
+                    }
+
                 default:
                     return "Error: Unknown tool.";
             }
@@ -275,16 +331,29 @@ class ChatService {
 
     async executeRepoCreation(userId, prompt, techStack) {
         try {
+            logger.setContext(userId, null, 'repo-creator');
+            await logger.info(`🏗️ Starting project scaffolding: ${prompt}`);
+            
             const client = await githubService.getClientForOrg('ulla-labs');
             const repoName = prompt.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20);
             
+            await logger.info(`🛰️ Creating GitHub repository: ulla-labs/${repoName}`);
             const repo = await githubService.createRepository(client, repoName, prompt, 'ulla-labs');
+            
+            await logger.info(`📂 Generating code for ${techStack} stack...`);
             const files = await repoCreatorService.scaffoldProject(prompt, techStack);
             
+            const fileCount = Object.keys(files).length;
+            let current = 0;
             for (const [path, content] of Object.entries(files)) {
+                current++;
+                await logger.info(`📤 Pushing files: [${current}/${fileCount}] ${path}`);
                 await githubService.pushFile(client, repo.owner.login, repo.name, path, content, '🚀 Initial Scaffold');
             }
+            
+            await logger.success(`✅ Project Fully Scaffolled! Repository is live at ${repo.html_url}`);
         } catch (error) {
+            await logger.error(`❌ Async Repo Creation Failed: ${error.message}`);
             console.error('❌ Async Repo Creation Failed:', error);
         }
     }

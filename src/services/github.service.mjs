@@ -106,6 +106,24 @@ class GitHubService {
       return true;
   }
 
+  async listUserRepos(client) {
+      const { data } = await client.rest.repos.listForAuthenticatedUser({
+          sort: 'updated',
+          per_page: 100
+      });
+      return data.map(repo => ({
+          full_name: repo.full_name,
+          updated_at: repo.updated_at,
+          pushed_at: repo.pushed_at,
+          description: repo.description
+      }));
+  }
+
+  async deleteRepository(client, owner, repo) {
+      await client.rest.repos.delete({ owner, repo });
+      return true;
+  }
+
   async mergePullRequest(client, owner, repo, pullNumber) {
       const { data } = await client.rest.pulls.merge({ owner, repo, pull_number: pullNumber });
       return data;
@@ -140,6 +158,15 @@ class GitHubService {
   async createPullRequest(client, owner, repo, prData) {
       const { data } = await client.rest.pulls.create({ owner, repo, title: prData.title, body: prData.body, head: prData.head, base: prData.base });
       return data;
+  }
+
+  async getReadme(client, owner, repo) {
+      try {
+          const { data } = await client.rest.repos.getReadme({ owner, repo });
+          return Buffer.from(data.content, 'base64').toString('utf8');
+      } catch (e) {
+          return "README not found.";
+      }
   }
 
   verifySignature(payloadString, signature) {

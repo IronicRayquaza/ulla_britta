@@ -9,11 +9,16 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABA
 class LoggerService {
     constructor() {
         this.client = (SUPABASE_URL && SUPABASE_KEY) ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
-        this.context = { userId: null, repo: null, service: 'agent-core' };
+        this.fallbackUserId = 'a66ceed4-63a5-405a-85b5-9f8f59946690';
+        this.context = { userId: this.fallbackUserId, repo: null, service: 'agent-core' };
     }
 
     setContext(userId, repo, service = 'agent-core') {
-        this.context = { userId, repo, service };
+        this.context = { 
+            userId: userId || this.fallbackUserId, 
+            repo, 
+            service 
+        };
     }
 
     async log(level, message, metadata = {}) {
