@@ -228,6 +228,8 @@ class ChatService {
                 2. Instead, immediately call 'list_user_repositories' to find the most recently updated project and use that.
                 3. If they ask to "fork some repos" or "find something," use the 'autonomous_discovery' tool.
                 4. BE PROACTIVE. Your goal is to reduce the number of steps the user has to take.
+                5. AFTER calling any tool, you MUST write a clear, friendly Markdown summary of what you did and what the result was. NEVER return an empty response.
+                6. If a user asks to create a workflow or CI/CD for "an organisation" and doesn't specify a repo, use push_custom_file on the most recently active repo you know about.
                 
                 Current Status: ${JSON.stringify(context)}
             `;
@@ -242,7 +244,10 @@ class ChatService {
             
             if (calls && calls.length > 0) {
                 const toolResults = [];
+                const toolSummaries = []; // Build our own fallback summary
+
                 for (const call of calls) {
+                    await logger.info(`🔧 Calling tool: ${call.name}`);
                     const actionResult = await this.executeTool(userId, call.name, call.args);
                     toolResults.push({
                         functionResponse: {
@@ -250,13 +255,31 @@ class ChatService {
                             response: { content: actionResult }
                         }
                     });
+                    toolSummaries.push({ tool: call.name, args: call.args, result: actionResult });
                 }
                 
                 const finalResult = await chat.sendMessage(toolResults);
-                return finalResult.response.text();
+                const finalText = finalResult.response.text();
+
+                // Guard against empty model response — build our own summary
+                if (!finalText || finalText.trim() === '') {
+                    await logger.info('⚠️ Model returned empty text after tool use. Building fallback summary...');
+                    const summaryLines = toolSummaries.map(s => {
+                        const repoInfo = s.args?.repoName ? ` on \`${s.args.repoName}\`` : '';
+                        const pathInfo = s.args?.path ? ` at \`${s.args.path}\`` : '';
+                        return `- **${s.tool}**${repoInfo}${pathInfo}: ${s.result}`;
+                    });
+                    return `✅ **Done!** Here's what I just did:\n\n${summaryLines.join('\n')}`;
+                }
+
+                return finalText;
             }
 
-            return response.text();
+            const text = response.text();
+            if (!text || text.trim() === '') {
+                return `⚠️ I processed your request but have nothing to report. Please try being more specific about the repository name.`;
+            }
+            return text;
         } catch (error) {
             console.error('🔥 Chat Error:', error);
             await logger.error(`🧠 Neural block: ${error.message}`);
