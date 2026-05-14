@@ -178,11 +178,12 @@ class ChatService {
     async processMessage(userId, message) {
         try {
             logger.setContext(userId, null, 'chat-processor');
+            await logger.info(`📥 Neural link received message: "${message.substring(0, 50)}..."`);
 
             // [INTELLIGENCE LAYER] Check if user is approving a pending plan
             const isApproval = /^(yes|yes execute|execute|confirm|go ahead|proceed|do it|run it)/i.test(message.trim());
             if (isApproval && this.pendingPlan) {
-                console.log('[INTELLIGENCE] User approved pending plan. Executing...');
+                await logger.info('🧠 User approval detected. Initiating multi-step plan execution...');
                 const result = await this.executePlan(userId, this.pendingPlan);
                 this.pendingPlan = null;
                 return result;
@@ -190,14 +191,17 @@ class ChatService {
 
             // [INTELLIGENCE LAYER] Classify message: vague vs specific
             const messageType = intelligenceService.classify(message);
+            await logger.info(`🔍 Intent classification: ${messageType.toUpperCase()}`);
 
             if (messageType === 'vague') {
+                await logger.info('🧠 Vague intent detected. Engaging Intelligence Layer for planning...');
                 const { formatted, plan } = await intelligenceService.thinkAndPlan(userId, message);
                 this.pendingPlan = plan; // Store for approval
                 return formatted;
             }
 
             // Specific request — standard tool-calling flow
+            await logger.info('⚡ Specific intent detected. Consulting tool manifest...');
             const context = await databaseService.getRecentActivity(userId, 5);
             const chat = this.model.startChat();
 
