@@ -35,6 +35,20 @@ class ChatService {
                         }
                     },
                     {
+                        name: "push_custom_file",
+                        description: "Creates or updates a single specific file in a repository with custom content. Use this for CI/CD workflows, config files, or one-off document creation.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                repoName: { type: "string", description: "Full repository name, e.g. ulla-labs/my-repo" },
+                                path: { type: "string", description: "The file path including filename, e.g. .github/workflows/ci.yml" },
+                                content: { type: "string", description: "The full content of the file to be created" },
+                                commitMessage: { type: "string", description: "A descriptive commit message" }
+                            },
+                            required: ["repoName", "path", "content", "commitMessage"]
+                        }
+                    },
+                    {
                         name: "create_repository",
                         description: "Creates a NEW repository. Use this for scaffolding new projects.",
                         parameters: {
@@ -381,6 +395,17 @@ class ChatService {
                         return `Successfully DELETED repository: ${args.repoName}`;
                     } catch (e) {
                         return `Failed to delete repository: ${e.message}`;
+                    }
+
+                case 'push_custom_file':
+                    try {
+                        const [pOwner, pRepo] = args.repoName.split('/');
+                        const pClient = await githubService.getClientForOrg(pOwner);
+                        await githubService.pushFile(pClient, pOwner, pRepo, args.path, args.content, args.commitMessage);
+                        await logger.success(`✅ Successfully pushed file "${args.path}" to ${args.repoName}`);
+                        return `Success: I have pushed the file "${args.path}" to ${args.repoName} with the following commit message: "${args.commitMessage}".`;
+                    } catch (e) {
+                        return `Failed to push custom file: ${e.message}`;
                     }
 
                 case 'audit_all_repos':
