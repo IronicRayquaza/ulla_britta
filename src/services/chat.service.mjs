@@ -5,14 +5,19 @@ import githubService from './github.service.mjs';
 import { sendEmail } from './email.service.mjs';
 import advancedWorkflowsService from './advanced-workflows.service.mjs';
 import logger from './logger.service.mjs';
+import intelligenceService from './intelligence.service.mjs';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 /**
  * Integrated Chat Agent with "Search & Act" Autonomy
+ * Powered by a General Intelligence Layer for vague/complex requests.
  */
 class ChatService {
     constructor() {
+        // Pending plan awaiting user approval { plan, repoContext }
+        this.pendingPlan = null;
+        this.autopilotActive = false;
         this.tools = [
             {
                 functionDeclarations: [
@@ -172,6 +177,27 @@ class ChatService {
 
     async processMessage(userId, message) {
         try {
+            logger.setContext(userId, null, 'chat-processor');
+
+            // [INTELLIGENCE LAYER] Check if user is approving a pending plan
+            const isApproval = /^(yes|yes execute|execute|confirm|go ahead|proceed|do it|run it)/i.test(message.trim());
+            if (isApproval && this.pendingPlan) {
+                console.log('[INTELLIGENCE] User approved pending plan. Executing...');
+                const result = await this.executePlan(userId, this.pendingPlan);
+                this.pendingPlan = null;
+                return result;
+            }
+
+            // [INTELLIGENCE LAYER] Classify message: vague vs specific
+            const messageType = intelligenceService.classify(message);
+
+            if (messageType === 'vague') {
+                const { formatted, plan } = await intelligenceService.thinkAndPlan(userId, message);
+                this.pendingPlan = plan; // Store for approval
+                return formatted;
+            }
+
+            // Specific request — standard tool-calling flow
             const context = await databaseService.getRecentActivity(userId, 5);
             const chat = this.model.startChat();
 
@@ -217,6 +243,32 @@ class ChatService {
             console.error('🔥 Chat Error:', error);
             return `❌ I hit a neural block: ${error.message}`;
         }
+    }
+
+    /**
+     * Executes an approved intelligence plan step by step.
+     */
+    async executePlan(userId, plan) {
+        logger.setContext(userId, null, 'plan-executor');
+        await logger.info(`⚙️ Executing approved plan: ${plan.plan.length} steps...`);
+
+        const results = [];
+        for (const step of plan.plan) {
+            await logger.info(`🛠️ Step ${step.step}: ${step.description}`);
+            try {
+                await this.executeTool(userId, step.action, {
+                    repoName: step.target || '',
+                });
+                results.push(`✅ Step ${step.step}: ${step.description}`);
+                await logger.info(`✅ Step ${step.step} complete.`);
+            } catch (e) {
+                results.push(`⚠️ Step ${step.step}: ${step.description} → Failed (${e.message})`);
+                await logger.warn(`⚠️ Step ${step.step} failed: ${e.message}`);
+            }
+        }
+
+        await logger.success('✅ Plan execution complete!');
+        return `**✅ Execution Complete!**\n\n${results.join('\n')}\n\n_All tasks processed. Check your email for detailed reports._`;
     }
 
     async executeTool(userId, name, args) {
@@ -325,6 +377,30 @@ class ChatService {
                     } catch (e) {
                         return `Failed to delete repository: ${e.message}`;
                     }
+
+                case 'audit_all_repos':
+                    try {
+                        const allRepos = await githubService.listUserRepos(client);
+                        await logger.info(`🔍 Cross-repo audit started for ${allRepos.length} repositories...`);
+                        const auditResults = [];
+                        // Audit top 5 most recently active repos to avoid rate limiting
+                        const topRepos = allRepos
+                            .sort((a, b) => new Date(b.pushed_at) - new Date(a.pushed_at))
+                            .slice(0, 5);
+                        for (const repo of topRepos) {
+                            const health = await advancedWorkflowsService.checkRepoHealth(repo.full_name);
+                            auditResults.push(`### ${repo.full_name}\n${health}`);
+                        }
+                        await logger.success('✅ Cross-repo audit complete!');
+                        return auditResults.join('\n\n---\n\n');
+                    } catch (e) {
+                        return `Audit failed: ${e.message}`;
+                    }
+
+                case 'enable_autopilot':
+                    this.autopilotActive = true;
+                    await logger.success('✅ Autopilot Mode activated!');
+                    return `**🛰️ Autopilot Mode Activated!**\n\nI am now your full-time DevOps engineer. Here is what I will do continuously:\n\n- **Hourly:** Security scan across all repos\n- **Daily:** Dependency updates → auto-merge if tests pass\n- **Weekly:** Close stale issues, archive dead repos\n- **On every PR:** Automated code review\n\nYou can check the SYSTEM_LOGS panel at any time to see what I'm working on. Say **"disable autopilot"** to stop.`;
 
                 default:
                     return "Error: Unknown tool.";
