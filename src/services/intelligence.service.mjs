@@ -19,7 +19,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 class IntelligenceService {
 
     constructor() {
-        this.reasoningModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+        this.reasoningModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     }
 
     /**
@@ -27,35 +27,41 @@ class IntelligenceService {
      * Returns: 'vague' | 'specific'
      */
     classify(message) {
-        const vaguePatterns = [
-            /make.*better/i,
-            /fix.*everything/i,
-            /clean.*up/i,
-            /improve.*repo/i,
-            /make.*production.ready/i,
-            /audit.*everything/i,
-            /analyze.*all/i,
-            /check.*everything/i,
-            /optimize/i,
-            /make.*repos.*good/i,
-            /what.*wrong/i,
-            /help me.*become/i,
-            /i want to learn/i,
-            /enable autopilot/i,
-            /start autopilot/i,
-            /what should i work on/i,
-            /give me.*summary of everything/i,
-            /overall.*health/i,
-        ];
+        try {
+            const vaguePatterns = [
+                /make.*better/i,
+                /fix.*everything/i,
+                /clean.*up/i,
+                /improve.*repo/i,
+                /make.*production.ready/i,
+                /audit.*everything/i,
+                /analyze.*all/i,
+                /check.*everything/i,
+                /optimize/i,
+                /make.*repos.*good/i,
+                /what.*wrong/i,
+                /help me.*become/i,
+                /i want to learn/i,
+                /enable autopilot/i,
+                /start autopilot/i,
+                /what should i work on/i,
+                /give me.*summary of everything/i,
+                /overall.*health/i,
+                /^audit$/i,
+                /^optimize$/i,
+            ];
 
-        const isVague = vaguePatterns.some(p => p.test(message));
-        console.log(`[INTELLIGENCE] Message classified as: ${isVague ? 'VAGUE' : 'SPECIFIC'}`);
-        return isVague ? 'vague' : 'specific';
+            const isVague = vaguePatterns.some(p => p.test(message));
+            console.log(`[INTELLIGENCE] Message classified as: ${isVague ? 'VAGUE' : 'SPECIFIC'}`);
+            return isVague ? 'vague' : 'specific';
+        } catch (e) {
+            console.error('[INTELLIGENCE] Classify Error:', e);
+            return 'specific'; // Fallback to standard flow
+        }
     }
 
     /**
      * Gathers full GitHub context: all repos, their health signals, recent activity.
-     * This is the "eyes" of the intelligence layer.
      */
     async gatherContext(userId) {
         try {
@@ -64,6 +70,7 @@ class IntelligenceService {
 
             // Fetch all repos
             const repos = await githubService.listUserRepos(client);
+            if (!repos || !Array.isArray(repos)) return [];
 
             // Enrich each repo with basic health signals
             const enriched = repos.map(repo => {

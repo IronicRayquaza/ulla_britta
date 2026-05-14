@@ -245,6 +245,7 @@ class ChatService {
             return response.text();
         } catch (error) {
             console.error('🔥 Chat Error:', error);
+            await logger.error(`🧠 Neural block: ${error.message}`);
             return `❌ I hit a neural block: ${error.message}`;
         }
     }
