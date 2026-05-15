@@ -315,7 +315,11 @@ class ChatService {
 
     async executeTool(userId, name, args) {
         try {
-            const client = await githubService.getClientForOrg('ulla-labs');
+            // [HARDENING] Dynamically resolve GitHub Client based on user installation
+            const installationId = await databaseService.getInstallationIdByRepo(args.repoName || '', userId);
+            const client = installationId 
+                ? await githubService.getClient(installationId)
+                : await githubService.getClientForOrg('ulla-labs');
 
             switch (name) {
                 case 'autonomous_discovery':

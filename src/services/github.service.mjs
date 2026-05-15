@@ -106,18 +106,21 @@ class GitHubService {
       return true;
   }
 
-  async listUserRepos(client) {
-      const { data } = await client.rest.repos.listForAuthenticatedUser({
-          sort: 'updated',
-          per_page: 100
-      });
-      return data.map(repo => ({
-          full_name: repo.full_name,
-          updated_at: repo.updated_at,
-          pushed_at: repo.pushed_at,
-          description: repo.description
-      }));
-  }
+   async listUserRepos(client) {
+       // For GitHub Apps, the correct endpoint to list repos accessible to the installation
+       // is listReposAccessibleToInstallation.
+       const { data } = await client.rest.apps.listReposAccessibleToInstallation({
+           per_page: 100
+       });
+       
+       const repos = data.repositories || [];
+       return repos.map(repo => ({
+           full_name: repo.full_name,
+           updated_at: repo.updated_at,
+           pushed_at: repo.pushed_at,
+           description: repo.description
+       }));
+   }
 
   async deleteRepository(client, owner, repo) {
       await client.rest.repos.delete({ owner, repo });

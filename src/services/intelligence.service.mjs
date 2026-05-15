@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import githubService from './github.service.mjs';
+import databaseService from './database.service.mjs';
 import logger from './logger.service.mjs';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -66,7 +67,12 @@ class IntelligenceService {
     async gatherContext(userId) {
         try {
             await logger.info('🔍 Gathering full GitHub context for intelligent analysis...');
-            const client = await githubService.getClientForOrg('ulla-labs');
+            
+            // [DYNAMIC RESOLUTION] Find the best installation client for this user
+            const installationId = await databaseService.getInstallationIdByRepo('', userId);
+            const client = installationId 
+                ? await githubService.getClient(installationId)
+                : await githubService.getClientForOrg('ulla-labs');
 
             // Fetch all repos
             const repos = await githubService.listUserRepos(client);
