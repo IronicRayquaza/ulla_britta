@@ -15,6 +15,9 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
  */
 class ChatService {
     constructor() {
+        // [MEMORY] Persistent chat sessions per user
+        this.sessions = new Map();
+        
         // Pending plan awaiting user approval { plan, repoContext }
         this.pendingPlan = null;
         this.autopilotActive = false;
@@ -233,21 +236,25 @@ class ChatService {
             // Specific request — standard tool-calling flow
             await logger.info('⚡ Specific intent detected. Consulting tool manifest...');
             const context = await databaseService.getRecentActivity(userId, 5);
-            const chat = this.model.startChat();
+            
+            // [MEMORY] Get or create session for this user
+            if (!this.sessions.has(userId)) {
+                this.sessions.set(userId, this.model.startChat());
+            }
+            const chat = this.sessions.get(userId);
 
             const systemInstruction = `
                 You are Ulla Britta, a Smart SRE Agent. 
-                YOU HAVE MAXIMUM AUTONOMY.
+                YOU HAVE MAXIMUM AUTONOMY. YOU ARE ACTION-ORIENTED.
                 
                 CRITICAL RULES:
-                1. If a user asks for a summary of their "last commit" or "repo health" but doesn't specify a repo, DO NOT ASK THEM FOR THE NAME. 
-                2. Instead, immediately call 'list_user_repositories' to find the most recently updated project and use that.
-                3. If they ask to "fork some repos" or "find something," use the 'autonomous_discovery' tool.
-                4. BE PROACTIVE. Your goal is to reduce the number of steps the user has to take.
-                5. AFTER calling any tool, you MUST write a clear, friendly Markdown summary. NEVER return an empty response.
-                6. If a user asks to "mail this" or "send this to my gmail," use the 'summarize_latest_commit' tool on the repository you were just discussing.
+                1. DO NOT be a "discovery bot". If you see a repo in the 'Current Status' below, USE IT. Do not call list_user_repositories unless the status is empty.
+                2. If a user asks for a CI/CD, a summary, or a fix "for my project", look at the most recently active repo in the Status and DO THE WORK.
+                3. PROACTIVE ACTION: Your priority is: EXECUTE TOOL -> SUMMARIZE. Never return empty text.
+                4. If you decide to list repositories, explain WHY you are doing it (e.g. "I'm looking for your latest project...").
+                5. MEMORY: You now have long-term session memory. Remember the names of repositories the user mentioned in previous turns.
                 
-                Current Status: ${JSON.stringify(context)}
+                Current Status (Most Recent Projects): ${JSON.stringify(context)}
             `;
 
             let result = await chat.sendMessage([
