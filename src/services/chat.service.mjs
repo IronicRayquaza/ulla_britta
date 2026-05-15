@@ -72,6 +72,22 @@ class ChatService {
                         }
                     },
                     {
+                        name: "mail_repo_files",
+                        description: "Fetches the contents of specific files in a repository and emails them to the user. Use this when the user asks to 'mail the files'.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                repoName: { type: "string", description: "Full repository name, e.g. ulla-labs/my-repo" },
+                                files: { 
+                                    type: "array", 
+                                    items: { type: "string" },
+                                    description: "List of file paths to email. If empty, the agent will pick the most important ones (README, src files)."
+                                }
+                            },
+                            required: ["repoName"]
+                        }
+                    },
+                    {
                         name: "review_pull_request",
                         description: "Analyzes a PR diff and posts inline comments or a general review.",
                         parameters: {
@@ -370,6 +386,37 @@ class ChatService {
 
                 case 'summarize_latest_commit':
                     return await this.executeSummarizeCommit(args.repoName);
+
+                case 'mail_repo_files':
+                    try {
+                        const [mOwner, mRepo] = args.repoName.split('/');
+                        let filesToMail = args.files || [];
+                        if (filesToMail.length === 0) {
+                            // Fetch root directory to find important files
+                            const { data: rootContents } = await client.rest.repos.getContent({ owner: mOwner, repo: mRepo, path: '' });
+                            const importantFiles = rootContents
+                                .filter(f => f.type === 'file' && (f.name.match(/\.(js|ts|py|mjs|json|md|yml|yaml)$/) || f.name.includes('config')))
+                                .map(f => f.name)
+                                .slice(0, 8);
+                            filesToMail = importantFiles;
+                        }
+
+                        let emailContent = `# 📂 Source Repository: ${args.repoName}\n\n`;
+                        emailContent += `_The following source files have been pulled for your review._\n\n---\n\n`;
+                        
+                        for (const path of filesToMail) {
+                            const content = await githubService.getFileContent(client, mOwner, mRepo, path);
+                            if (content) {
+                                emailContent += `## 📄 File: ${path}\n\`\`\`\n${content}\n\`\`\`\n\n---\n\n`;
+                            }
+                        }
+
+                        await sendEmail(emailContent, args.repoName);
+                        await logger.success(`✉️ Mailed files from ${args.repoName} to your Gmail.`);
+                        return `✅ **Success!** I have compiled ${filesToMail.length} source files from \`${args.repoName}\` and mailed the full contents to your configured Gmail address. Check your inbox!`;
+                    } catch (e) {
+                        return `Failed to mail files: ${e.message}`;
+                    }
 
                 case 'review_pull_request':
                     return await advancedWorkflowsService.reviewPullRequest(args.repoName, args.prNumber);

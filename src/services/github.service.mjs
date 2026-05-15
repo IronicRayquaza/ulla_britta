@@ -182,6 +182,19 @@ class GitHubService {
           return false;
       }
   }
+
+  async getFileContent(client, owner, repo, path) {
+      try {
+           const { data } = await client.rest.repos.getContent({ owner, repo, path });
+           if (Array.isArray(data)) return null; 
+           if (data.content) {
+               return Buffer.from(data.content, 'base64').toString('utf8');
+           }
+           return null;
+       } catch (e) {
+           return null;
+       }
+   }
 }
 
 export default new GitHubService();
