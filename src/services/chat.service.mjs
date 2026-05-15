@@ -228,8 +228,8 @@ class ChatService {
                 2. Instead, immediately call 'list_user_repositories' to find the most recently updated project and use that.
                 3. If they ask to "fork some repos" or "find something," use the 'autonomous_discovery' tool.
                 4. BE PROACTIVE. Your goal is to reduce the number of steps the user has to take.
-                5. AFTER calling any tool, you MUST write a clear, friendly Markdown summary of what you did and what the result was. NEVER return an empty response.
-                6. If a user asks to create a workflow or CI/CD for "an organisation" and doesn't specify a repo, use push_custom_file on the most recently active repo you know about.
+                5. AFTER calling any tool, you MUST write a clear, friendly Markdown summary. NEVER return an empty response.
+                6. If a user asks to "mail this" or "send this to my gmail," use the 'summarize_latest_commit' tool on the repository you were just discussing.
                 
                 Current Status: ${JSON.stringify(context)}
             `;
@@ -244,7 +244,7 @@ class ChatService {
             
             if (calls && calls.length > 0) {
                 const toolResults = [];
-                const toolSummaries = []; // Build our own fallback summary
+                const toolSummaries = []; 
 
                 for (const call of calls) {
                     await logger.info(`🔧 Calling tool: ${call.name}`);
@@ -255,21 +255,29 @@ class ChatService {
                             response: { content: actionResult }
                         }
                     });
-                    toolSummaries.push({ tool: call.name, args: call.args, result: actionResult });
+                    
+                    // CLEAN FALLBACK FORMATTING
+                    let cleanResult = actionResult;
+                    if (call.name === 'list_user_repositories' && typeof actionResult === 'string') {
+                        try {
+                            const repos = JSON.parse(actionResult);
+                            cleanResult = repos.slice(0, 5).map(r => `\`${r.full_name}\` (Last push: ${new Date(r.pushed_at).toLocaleDateString()})`).join('\n');
+                            if (repos.length > 5) cleanResult += `\n...and ${repos.length - 5} more.`;
+                        } catch(e) {}
+                    }
+                    
+                    toolSummaries.push({ tool: call.name, args: call.args, result: cleanResult });
                 }
                 
                 const finalResult = await chat.sendMessage(toolResults);
                 const finalText = finalResult.response.text();
 
-                // Guard against empty model response — build our own summary
                 if (!finalText || finalText.trim() === '') {
-                    await logger.info('⚠️ Model returned empty text after tool use. Building fallback summary...');
+                    await logger.info('⚠️ Model returned empty text. Building clean fallback...');
                     const summaryLines = toolSummaries.map(s => {
-                        const repoInfo = s.args?.repoName ? ` on \`${s.args.repoName}\`` : '';
-                        const pathInfo = s.args?.path ? ` at \`${s.args.path}\`` : '';
-                        return `- **${s.tool}**${repoInfo}${pathInfo}: ${s.result}`;
+                        return `### 🛠️ Tool: ${s.tool}\n${s.result}`;
                     });
-                    return `✅ **Done!** Here's what I just did:\n\n${summaryLines.join('\n')}`;
+                    return `✅ **Execution Complete!**\n\n${summaryLines.join('\n\n')}\n\n_Ulla is monitoring your progress._`;
                 }
 
                 return finalText;
