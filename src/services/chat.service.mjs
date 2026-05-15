@@ -262,15 +262,21 @@ class ChatService {
                 { text: message }
             ]);
 
+            // [AGENTIC LOOP] Keep executing tools until we have a final text response (max 5 rounds)
             let response = result.response;
-            const calls = response.functionCalls();
-            
-            if (calls && calls.length > 0) {
-                const toolResults = [];
-                const toolSummaries = []; 
+            let allSummaries = [];
+            let rounds = 0;
+            const MAX_ROUNDS = 5;
 
+            while (rounds < MAX_ROUNDS) {
+                rounds++;
+                const calls = response.functionCalls();
+
+                if (!calls || calls.length === 0) break; // No more tool calls — we have the answer
+
+                const toolResults = [];
                 for (const call of calls) {
-                    await logger.info(`🔧 Calling tool: ${call.name}`);
+                    await logger.info(`🔧 [Round ${rounds}] Calling tool: ${call.name}`);
                     const actionResult = await this.executeTool(userId, call.name, call.args);
                     toolResults.push({
                         functionResponse: {
@@ -278,8 +284,8 @@ class ChatService {
                             response: { content: actionResult }
                         }
                     });
-                    
-                    // CLEAN FALLBACK FORMATTING
+
+                    // Clean display for fallback
                     let cleanResult = actionResult;
                     if (call.name === 'list_user_repositories' && typeof actionResult === 'string') {
                         try {
@@ -288,29 +294,22 @@ class ChatService {
                             if (repos.length > 5) cleanResult += `\n...and ${repos.length - 5} more.`;
                         } catch(e) {}
                     }
-                    
-                    toolSummaries.push({ tool: call.name, args: call.args, result: cleanResult });
-                }
-                
-                const finalResult = await chat.sendMessage(toolResults);
-                const finalText = finalResult.response.text();
-
-                if (!finalText || finalText.trim() === '') {
-                    await logger.info('⚠️ Model returned empty text. Building clean fallback...');
-                    const summaryLines = toolSummaries.map(s => {
-                        return `### 🛠️ Tool: ${s.tool}\n${s.result}`;
-                    });
-                    return `✅ **Execution Complete!**\n\n${summaryLines.join('\n\n')}\n\n_Ulla is monitoring your progress._`;
+                    allSummaries.push({ tool: call.name, args: call.args, result: cleanResult });
                 }
 
-                return finalText;
+                // Send tool results back and get next response
+                const nextResult = await chat.sendMessage(toolResults);
+                response = nextResult.response;
             }
 
-            const text = response.text();
-            if (!text || text.trim() === '') {
-                return `⚠️ I processed your request but have nothing to report. Please try being more specific about the repository name.`;
+            const finalText = response.text();
+            if (!finalText || finalText.trim() === '') {
+                await logger.info('⚠️ Agentic loop finished with no text. Building clean fallback...');
+                const summaryLines = allSummaries.map(s => `### 🛠️ Tool: \`${s.tool}\`\n${s.result}`);
+                return `✅ **Execution Complete!**\n\n${summaryLines.join('\n\n')}\n\n_Ulla completed ${allSummaries.length} action(s)._`;
             }
-            return text;
+
+            return finalText;
         } catch (error) {
             console.error('🔥 Chat Error:', error);
             await logger.error(`🧠 Neural block: ${error.message}`);
