@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import aiGateway from './ai.service.mjs';
 import repoCreatorService from './repo-creator.service.mjs';
 import databaseService from './database.service.mjs';
 import githubService from './github.service.mjs';
@@ -201,29 +202,9 @@ class ChatService {
             }
         ];
 
-        // Use gemini-1.5-flash: stable, fast, and not overloaded like preview models
-        this.model = genAI.getGenerativeModel({ 
-            model: 'gemini-1.5-flash',
-            tools: this.tools
-        });
-    }
-
-    // Retry wrapper for Gemini API calls — handles 503 overload gracefully
-    async callWithRetry(fn, maxRetries = 3) {
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-                return await fn();
-            } catch (err) {
-                const is503 = err?.status === 503 || err?.message?.includes('503') || err?.message?.includes('Service Unavailable');
-                if (is503 && attempt < maxRetries) {
-                    const waitMs = attempt * 2000; // 2s, 4s backoff
-                    await logger.warn(`⏳ Gemini 503 overload. Retrying in ${waitMs/1000}s... (attempt ${attempt}/${maxRetries})`);
-                    await new Promise(r => setTimeout(r, waitMs));
-                    continue;
-                }
-                throw err;
-            }
-        }
+        // Primary model: gemini-3-flash-preview via AI Gateway
+        // Fallback: Groq → OpenRouter (handled by aiGateway on circuit-breaker trip)
+        this.model = aiGateway.getGeminiModel(this.tools);
     }
 
     async processMessage(userId, message) {
@@ -276,10 +257,29 @@ class ChatService {
                 Current Status (use these repos directly): ${JSON.stringify(context)}
             `;
 
-            let result = await this.callWithRetry(() => chat.sendMessage([
-                { text: systemInstruction },
-                { text: message }
-            ]));
+            let result;
+            try {
+                result = await chat.sendMessage([
+                    { text: systemInstruction },
+                    { text: message }
+                ]);
+            } catch (initErr) {
+                // Gemini unavailable — fallback to Groq/OpenRouter via AI Gateway
+                const is429or503 = initErr?.status === 429 || initErr?.status === 503
+                    || initErr?.message?.includes('429') || initErr?.message?.includes('503')
+                    || initErr?.message?.includes('rate limit') || initErr?.message?.includes('Service Unavailable');
+                if (is429or503) {
+                    aiGateway.recordFailure('gemini');
+                    await logger.warn(`⚡ Gemini unavailable. Switching to AI Gateway fallback (Groq/OpenRouter)...`);
+                    const fallbackMessages = [
+                        { role: 'system', content: systemInstruction },
+                        { role: 'user', content: message }
+                    ];
+                    const fallbackResult = await aiGateway.agentChat(fallbackMessages, this.tools);
+                    return fallbackResult.text || '✅ Task completed via fallback provider.';
+                }
+                throw initErr;
+            }
 
             // [AGENTIC LOOP] Max 3 rounds — one for the task, one for edge cases, one for recovery
             let response = result.response;
@@ -316,8 +316,28 @@ class ChatService {
                     allSummaries.push({ tool: call.name, args: call.args, result: cleanResult });
                 }
 
-                // Send tool results back and get next response
-                const nextResult = await this.callWithRetry(() => chat.sendMessage(toolResults));
+                // Send tool results back — with Gateway fallback if Gemini trips
+                let nextResult;
+                try {
+                    nextResult = await chat.sendMessage(toolResults);
+                } catch (roundErr) {
+                    const is429or503 = roundErr?.status === 429 || roundErr?.status === 503
+                        || roundErr?.message?.includes('429') || roundErr?.message?.includes('503')
+                        || roundErr?.message?.includes('rate limit') || roundErr?.message?.includes('Service Unavailable');
+                    if (is429or503) {
+                        aiGateway.recordFailure('gemini');
+                        await logger.warn(`⚡ Gemini rate-limited mid-loop. Falling back to Groq/OpenRouter...`);
+                        // Build message history for stateless fallback providers
+                        const fbMessages = [
+                            { role: 'system', content: systemInstruction },
+                            { role: 'user', content: message },
+                            ...allSummaries.map(s => ({ role: 'assistant', content: `Executed tool ${s.tool}: ${JSON.stringify(s.result).substring(0, 200)}` }))
+                        ];
+                        const fbResult = await aiGateway.agentChat(fbMessages, this.tools);
+                        return fbResult.text || `✅ Completed ${allSummaries.length} action(s) via fallback provider.`;
+                    }
+                    throw roundErr;
+                }
                 response = nextResult.response;
             }
 

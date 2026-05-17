@@ -22,15 +22,16 @@
     "@octokit/webhooks": "^14.2.0",
     "@supabase/supabase-js": "^2.104.0",
     "axios": "^1.15.2",
+    "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "glob": "^13.0.6",
     "ioredis": "^5.10.1",
     "node-fetch": "^3.3.2",
     "nodemailer": "^8.0.5",
+    "octokit": "^4.0.2",
+    "openai": "^6.38.0",
     "pdfkit": "^0.18.0",
-    "resend": "^6.12.2",
-    "cors": "^2.8.5",
-    "octokit": "^4.0.2"
+    "resend": "^6.12.2"
   }
 }
