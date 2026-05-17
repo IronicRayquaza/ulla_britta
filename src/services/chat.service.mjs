@@ -201,11 +201,29 @@ class ChatService {
             }
         ];
 
-        // LOCKED TO GEMINI 3 FLASH PREVIEW
+        // Use gemini-1.5-flash: stable, fast, and not overloaded like preview models
         this.model = genAI.getGenerativeModel({ 
-            model: 'gemini-3-flash-preview',
+            model: 'gemini-1.5-flash',
             tools: this.tools
         });
+    }
+
+    // Retry wrapper for Gemini API calls — handles 503 overload gracefully
+    async callWithRetry(fn, maxRetries = 3) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                return await fn();
+            } catch (err) {
+                const is503 = err?.status === 503 || err?.message?.includes('503') || err?.message?.includes('Service Unavailable');
+                if (is503 && attempt < maxRetries) {
+                    const waitMs = attempt * 2000; // 2s, 4s backoff
+                    await logger.warn(`⏳ Gemini 503 overload. Retrying in ${waitMs/1000}s... (attempt ${attempt}/${maxRetries})`);
+                    await new Promise(r => setTimeout(r, waitMs));
+                    continue;
+                }
+                throw err;
+            }
+        }
     }
 
     async processMessage(userId, message) {
@@ -244,29 +262,30 @@ class ChatService {
             const chat = this.sessions.get(userId);
 
             const systemInstruction = `
-                You are Ulla Britta, a Smart SRE Agent. 
-                YOU HAVE MAXIMUM AUTONOMY. YOU ARE ACTION-ORIENTED.
-                
-                CRITICAL RULES:
-                1. DO NOT be a "discovery bot". If you see a repo in the 'Current Status' below, USE IT. Do not call list_user_repositories unless the status is empty.
-                2. If a user asks for a CI/CD, a summary, or a fix "for my project", look at the most recently active repo in the Status and DO THE WORK.
-                3. PROACTIVE ACTION: Your priority is: EXECUTE TOOL -> SUMMARIZE. Never return empty text.
-                4. If you decide to list repositories, explain WHY you are doing it (e.g. "I'm looking for your latest project...").
-                5. MEMORY: You now have long-term session memory. Remember the names of repositories the user mentioned in previous turns.
-                
-                Current Status (Most Recent Projects): ${JSON.stringify(context)}
+                You are Ulla Britta, an SRE Agent. You are DIRECT and EFFICIENT.
+
+                ## CORE RULES — FOLLOW EXACTLY:
+                1. ONE TASK = ONE TOOL. Call only the tool needed for this specific request. DO NOT chain extra tools.
+                2. If the user asks to push a CI/CD file → call ONLY push_custom_file. Then STOP and explain what you pushed.
+                3. If the user asks to summarize a commit → call ONLY summarize_latest_commit. Then STOP.
+                4. NEVER call get_repository_readme or list_user_repositories unless the user explicitly asks for it.
+                5. If a repoName is in the user's message, USE IT DIRECTLY. Do not look it up first.
+                6. If no repo is mentioned, use the most recently updated one from Current Status below.
+                7. After ONE successful tool execution, write your summary and STOP. Do not call more tools.
+
+                Current Status (use these repos directly): ${JSON.stringify(context)}
             `;
 
-            let result = await chat.sendMessage([
+            let result = await this.callWithRetry(() => chat.sendMessage([
                 { text: systemInstruction },
                 { text: message }
-            ]);
+            ]));
 
-            // [AGENTIC LOOP] Keep executing tools until we have a final text response (max 5 rounds)
+            // [AGENTIC LOOP] Max 3 rounds — one for the task, one for edge cases, one for recovery
             let response = result.response;
             let allSummaries = [];
             let rounds = 0;
-            const MAX_ROUNDS = 5;
+            const MAX_ROUNDS = 3;
 
             while (rounds < MAX_ROUNDS) {
                 rounds++;
@@ -298,7 +317,7 @@ class ChatService {
                 }
 
                 // Send tool results back and get next response
-                const nextResult = await chat.sendMessage(toolResults);
+                const nextResult = await this.callWithRetry(() => chat.sendMessage(toolResults));
                 response = nextResult.response;
             }
 
@@ -359,7 +378,7 @@ class ChatService {
                     const candidates = await githubService.searchRepositories(client, { topic: args.topic, limit: 10 });
                     
                     // 2. Decision
-                    const decisionModel = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+                    const decisionModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
                     const analysis = await decisionModel.generateContent(`
                         Rank these repos for "${args.topic}". Pick top ${args.count || 3}.
                         Repos: ${JSON.stringify(candidates)}
@@ -571,7 +590,7 @@ class ChatService {
 
             const { data: commitDetail } = await client.rest.repos.getCommit({ owner, repo, ref: latestCommit.sha });
 
-            const summarizeModel = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+            const summarizeModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
             const prompt = `
                 Analyze this commit and generate a professional Markdown report.
                 Message: ${commitDetail.commit.message}

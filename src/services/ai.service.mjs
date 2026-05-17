@@ -66,7 +66,7 @@ export async function analyzeCommits(commits, repoName, branch = 'main', author 
       timestamp: new Date().toISOString(),
       autoFixApplied: false,
       githubUrl: `https://github.com/${repoName}/commit/${commits[0]?.id}`,
-      aiModel: 'gemini-3-flash-preview',
+      aiModel: 'gemini-1.5-flash',
       analysisTime: '3.8s'
     };
   } catch (e) {
@@ -82,7 +82,7 @@ export async function analyzeWithGemini(prompt) {
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ 
-    model: 'gemini-3-flash-preview',
+    model: 'gemini-1.5-flash',
     systemInstruction: "You are Ulla Britta, an elite SRE Agent. You must always use FULL, ABSOLUTE repository paths for all files (e.g., 'folder/subfolder/file.js'). Never assume files are at the root. Your analysis must be surgical, non-technical for executive summaries, and strictly grounded in the provided project structure."
   });
   
