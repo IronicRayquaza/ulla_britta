@@ -92,6 +92,18 @@ class ChatService {
                         }
                     },
                     {
+                        name: "mail_custom_content",
+                        description: "Sends an email to the user containing custom text or code generated during the chat. Use this when the user asks to email them a workflow, script, or summary that hasn't been pushed to GitHub.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                subject: { type: "string", description: "The subject line/title of the content, e.g. Generated CI/CD Workflow" },
+                                content: { type: "string", description: "The full markdown or code content to email" }
+                            },
+                            required: ["subject", "content"]
+                        }
+                    },
+                    {
                         name: "review_pull_request",
                         description: "Analyzes a PR diff and posts inline comments or a general review.",
                         parameters: {
@@ -461,6 +473,15 @@ class ChatService {
                         return `✅ **Success!** I have compiled ${filesToMail.length} source files from \`${args.repoName}\` and mailed the full contents to your configured Gmail address. Check your inbox!`;
                     } catch (e) {
                         return `Failed to mail files: ${e.message}`;
+                    }
+
+                case 'mail_custom_content':
+                    try {
+                        await sendEmail(args.content, args.subject);
+                        await logger.success(`✉️ Mailed custom content (${args.subject}) to your Gmail.`);
+                        return `✅ **Success!** I have emailed the custom generated content "${args.subject}" directly to your configured Gmail address. Check your inbox!`;
+                    } catch (e) {
+                        return `Failed to send custom email: ${e.message}`;
                     }
 
                 case 'review_pull_request':
