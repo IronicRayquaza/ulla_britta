@@ -20,7 +20,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 class IntelligenceService {
 
     constructor() {
-        this.reasoningModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        this.reasoningModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     }
 
     /**

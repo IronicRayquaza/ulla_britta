@@ -214,7 +214,7 @@ class ChatService {
             }
         ];
 
-        // Primary model: gemini-3-flash-preview via AI Gateway
+        // Primary model: gemini-2.5-flash-lite via AI Gateway
         // Fallback: Groq → OpenRouter (handled by aiGateway on circuit-breaker trip)
         this.model = aiGateway.getGeminiModel(this.tools);
     }
@@ -410,7 +410,7 @@ class ChatService {
                     const candidates = await githubService.searchRepositories(client, { topic: args.topic, limit: 10 });
                     
                     // 2. Decision
-                    const decisionModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+                    const decisionModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
                     const analysis = await decisionModel.generateContent(`
                         Rank these repos for "${args.topic}". Pick top ${args.count || 3}.
                         Repos: ${JSON.stringify(candidates)}
@@ -631,7 +631,7 @@ class ChatService {
 
             const { data: commitDetail } = await client.rest.repos.getCommit({ owner, repo, ref: latestCommit.sha });
 
-            const summarizeModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+            const summarizeModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
             const prompt = `
                 Analyze this commit and generate a professional Markdown report.
                 Message: ${commitDetail.commit.message}

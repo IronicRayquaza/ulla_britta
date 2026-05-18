@@ -90,10 +90,10 @@ class AIGateway {
         };
 
         // ── Model Config ──────────────────────────────────────
-        // gemini-1.5-flash: stable production model, 1500 req/day free — primary
-        // gemini-3-flash-preview: experimental, very low daily limits — only used as last-resort Gemini fallback
+        // gemini-2.5-flash: stable production model, 1500 req/day free — primary
+        // gemini-2.5-flash-lite: experimental, very low daily limits — only used as last-resort Gemini fallback
         this.models = {
-            gemini:     { primary: 'gemini-1.5-flash', fallback: 'gemini-3-flash-preview' },
+            gemini:     { primary: 'gemini-2.5-flash', fallback: 'gemini-2.5-flash-lite' },
             groq:       { primary: 'llama-3.3-70b-versatile', fallback: 'llama-3.1-8b-instant' },
             openrouter: { primary: 'meta-llama/llama-3.3-70b-instruct:free', fallback: 'google/gemini-2.0-flash-lite-preview-02-05:free' }
         };
