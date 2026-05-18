@@ -193,9 +193,23 @@ class DatabaseService {
             deployment_id: deploymentId,
             user_id: userId,
             project_id: projectId,
-            status: 'pending'
+            status: 'processing'
         });
     }
+
+    /**
+     * Update the status of an already-processed deployment.
+     * Call with 'fixed' only after the fix is CONFIRMED successful.
+     * Call with 'failed' if the fix threw an error.
+     */
+    async updateDeploymentStatus(deploymentId, status) {
+        if (!this.client) return;
+        await this.client
+            .from('processed_deployments')
+            .update({ status, processed_at: new Date().toISOString() })
+            .eq('deployment_id', deploymentId);
+    }
+
     /**
      * Look up the GitHub Installation ID for a repository.
      */

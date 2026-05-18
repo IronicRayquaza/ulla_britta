@@ -63,7 +63,7 @@ class VercelSentinel {
 
         console.log(`🚨 Sentinel: Found NEW failure for user ${integration.user_id}: ${deployment.uid} (${fullRepo})`);
 
-        // 3. Mark as processed immediately
+        // 3. Mark as 'processing' — NOT 'fixed' yet. We update this after the actual result.
         await databaseService.markDeploymentProcessed(deployment.uid, integration.user_id, deployment.projectId);
 
         // 4. Build a payload and process
@@ -80,7 +80,16 @@ class VercelSentinel {
             }
         };
 
-        await processEvent(event);
+        try {
+            await processEvent(event);
+            // ✅ Only update to 'fixed' after a confirmed successful processEvent
+            await databaseService.updateDeploymentStatus(deployment.uid, 'fixed');
+            console.log(`✅ Sentinel: Fix confirmed for ${deployment.uid}`);
+        } catch (fixErr) {
+            // ❌ Honest failure — mark as failed so user knows it was NOT fixed
+            await databaseService.updateDeploymentStatus(deployment.uid, 'failed');
+            console.error(`❌ Sentinel: Fix failed for ${deployment.uid}: ${fixErr.message}`);
+        }
     }
 }
 

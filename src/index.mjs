@@ -56,6 +56,53 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
+// ── GitHub App Onboarding ──────────────────────────────────────────────────
+// Called by the frontend after GitHub App install redirect returns installation_id
+app.post('/github/link-installation', async (req, res) => {
+    try {
+        const { userId, installationId } = req.body;
+
+        if (!userId || !installationId) {
+            return res.status(400).json({ error: 'userId and installationId are required' });
+        }
+
+        // Fetch installation details from GitHub to get account_login
+        const { Octokit } = await import('octokit');
+        const { createAppAuth } = await import('@octokit/auth-app');
+        const appOctokit = new Octokit({
+            authStrategy: createAppAuth,
+            auth: {
+                appId: process.env.GITHUB_APP_ID,
+                privateKey: process.env.GITHUB_PRIVATE_KEY.replace(/\\n/g, '\n'),
+            }
+        });
+
+        const { data: install } = await appOctokit.rest.apps.getInstallation({ installation_id: Number(installationId) });
+
+        // Save to github_installations table
+        const { createClient } = await import('@supabase/supabase-js');
+        const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+
+        await sb.from('github_installations').upsert({
+            user_id: userId,
+            installation_id: Number(installationId),
+            account_login: install.account.login,
+            account_type: install.account.type,
+            repositories_access: install.repository_selection,
+            status: 'active',
+            installed_at: new Date().toISOString(),
+            last_sync_at: new Date().toISOString()
+        }, { onConflict: 'installation_id' });
+
+        await logger.info(`✅ GitHub App linked: ${install.account.login} (installation ${installationId}) → user ${userId}`);
+        res.json({ success: true, account: install.account.login });
+    } catch (err) {
+        console.error('❌ GitHub link-installation failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
 // Start the Vercel Sentinel (Polls every 2 minutes)
 setInterval(() => {
     vercelSentinel.checkForFailures().catch(err => console.error('Sentinel Error:', err));
