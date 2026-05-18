@@ -23,8 +23,20 @@ class GitHubService {
         privateKey: process.env.GITHUB_PRIVATE_KEY.replace(/\\n/g, '\n'),
       }
     });
-    const { data } = await appOctokit.rest.apps.getOrgInstallation({ org: orgName });
-    return this.getClient(data.id);
+
+    try {
+      // Try as a GitHub Organization first
+      const { data } = await appOctokit.rest.apps.getOrgInstallation({ org: orgName });
+      return this.getClient(data.id);
+    } catch (orgErr) {
+      // Fallback: try as a personal GitHub account (user installation)
+      try {
+        const { data } = await appOctokit.rest.apps.getUserInstallation({ username: orgName });
+        return this.getClient(data.id);
+      } catch (userErr) {
+        throw new Error(`GitHub App is not installed for "${orgName}". Install it at https://github.com/settings/installations`);
+      }
+    }
   }
 
   /**
