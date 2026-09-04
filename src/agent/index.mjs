@@ -126,17 +126,23 @@ export class AgentService {
         }
     }
 
-    /** Mirrors loop events into the log stream the dashboard subscribes to. */
+    /**
+     * Mirrors loop events into the log stream the dashboard subscribes to.
+     * These use the same human phrasing the run timeline shows, so the log is
+     * readable on its own rather than a list of tool names.
+     */
     async logEvent(runLogger, event) {
         switch (event.type) {
             case EventType.THINKING:
                 return runLogger.info(`Thinking (step ${event.step}/${event.budget.maxSteps})`);
+            case EventType.NARRATION:
+                return runLogger.info(event.text);
             case EventType.TOOL_CALL:
-                return runLogger.info(`Calling ${event.name}`, { args: event.args });
+                return runLogger.info(event.narration || `Calling ${event.name}`, { args: event.args });
             case EventType.TOOL_RESULT:
                 return event.ok
-                    ? runLogger.success(`${event.name} succeeded`)
-                    : runLogger.warn(`${event.name} failed: ${event.result?.error?.message || 'unknown'}`);
+                    ? runLogger.success(event.narration || `${event.name} succeeded`)
+                    : runLogger.warn(event.narration || `${event.name} failed`);
             case EventType.PROVIDER_SWITCH:
                 return runLogger.warn(`Primary model unavailable — continuing on ${event.provider}`);
             case EventType.ERROR:

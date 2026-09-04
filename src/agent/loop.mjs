@@ -1,4 +1,5 @@
 import { assistant, toolResult, estimateTokens } from '../providers/messages.mjs';
+import { narrateStart, narrateResult } from './narration.mjs';
 import { Budget } from './budget.mjs';
 
 /**
@@ -12,6 +13,8 @@ import { Budget } from './budget.mjs';
 export const EventType = {
     RUN_START: 'run_start',
     THINKING: 'thinking',
+    // The agent's own words about what it is doing, in its voice.
+    NARRATION: 'narration',
     TOOL_CALL: 'tool_call',
     TOOL_RESULT: 'tool_result',
     PROVIDER_SWITCH: 'provider_switch',
@@ -69,6 +72,13 @@ export async function runAgent({
 
             history.push(assistant(turn.text, turn.toolCalls));
 
+            // A model usually explains what it is about to do before calling a tool.
+            // That text was previously kept in history and never shown, so the user
+            // watched a sequence of tool names with no reasoning attached to them.
+            if (turn.text?.trim() && turn.toolCalls?.length) {
+                await emit(EventType.NARRATION, { text: turn.text.trim() });
+            }
+
             // No tool calls means the model considers itself finished.
             if (!turn.toolCalls || turn.toolCalls.length === 0) {
                 finalText = turn.text || '';
@@ -77,9 +87,16 @@ export async function runAgent({
             }
 
             for (const call of turn.toolCalls) {
-                await emit(EventType.TOOL_CALL, { name: call.name, args: call.args, id: call.id });
+                await emit(EventType.TOOL_CALL, {
+                    name: call.name,
+                    args: call.args,
+                    id: call.id,
+                    // Plain-language description of what is about to happen.
+                    narration: narrateStart(call.name, call.args)
+                });
 
                 const result = await registry.execute(call.name, call.args, context);
+                const told = narrateResult(call.name, call.args, result);
 
                 // Structured result: the model can distinguish a failure from a
                 // success whose text happens to mention an error, and can tell
@@ -89,6 +106,10 @@ export async function runAgent({
                     id: call.id,
                     args: call.args,
                     ok: result.ok,
+                    // What happened, and the concrete details that show it happened:
+                    // file paths, counts, names, links.
+                    narration: told.summary,
+                    evidence: told.evidence,
                     result
                 });
 
