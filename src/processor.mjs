@@ -83,7 +83,7 @@ export async function processEvent(event) {
                 await databaseService.storeNarration(repository, { ...analysisData, report_markdown: markdownReport }, installationId);
             }
             
-            await sendEmail(markdownReport, repository);
+            await sendEmail(markdownReport, repository, userId);
             await logger.success(`Final report sent via email. 🏁`);
         } else if (type === 'vercel_failure') {
             await logger.warn(`🔥 Vercel Build Failure detected for ${payload.project_name}! Fetching logs...`);
@@ -108,7 +108,7 @@ export async function processEvent(event) {
             const result = await performDiagnostics(installationId, repository, null, null, branch, logs, context);
 
             if (result && result.report_markdown) {
-                await sendEmail(result.report_markdown, repository);
+                await sendEmail(result.report_markdown, repository, userId);
                 await logger.success(`Vercel auto-fix applied! Triggering redeploy...`);
                 await vercelService.triggerRedeploy(payload.deployment_id);
                 // Returned so callers (the Sentinel) can distinguish an applied fix
@@ -245,7 +245,7 @@ Since this repository is a fork of **${upstreamFullName}**, where would you like
             const result = await performDiagnostics(installationId, repository, runId, isWorkflow ? null : data, branch);
             
             if (result && result.report_markdown) {
-                await sendEmail(result.report_markdown, repository);
+                await sendEmail(result.report_markdown, repository, userId);
                 await logger.success(`Auto-fix applied and surgical report sent. 🩹`);
             }
         }

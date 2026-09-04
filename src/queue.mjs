@@ -9,8 +9,31 @@ const QUEUE_NAME = 'ulla_britta_events';
 
 class QueueService {
     constructor() {
-        this.client = new Redis(REDIS_URL);
-        this.client.on('error', (err) => console.error('Redis Error:', err));
+        this.client = new Redis(REDIS_URL, {
+            // Back off instead of hammering, and cap the delay so recovery stays quick.
+            retryStrategy: (times) => Math.min(times * 500, 10_000),
+            maxRetriesPerRequest: 3
+        });
+
+        // ioredis retries forever by default and logs the full AggregateError each
+        // time, which buries every other line in the log. Report the first failure
+        // and each recovery, then stay quiet while it retries.
+        this.connected = false;
+        this.errorReported = false;
+
+        this.client.on('error', (err) => {
+            if (!this.errorReported) {
+                console.error(`❌ Redis unavailable (${REDIS_URL}): ${err.message}. Retrying in the background...`);
+                this.errorReported = true;
+            }
+            this.connected = false;
+        });
+
+        this.client.on('ready', () => {
+            if (!this.connected) console.log('✅ Redis connected.');
+            this.connected = true;
+            this.errorReported = false;
+        });
     }
 
     async enqueue(type, payload) {

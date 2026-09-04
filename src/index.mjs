@@ -11,7 +11,7 @@ import dotenv from 'dotenv';
 import vercelService from './services/vercel.service.mjs';
 import vercelIntegrationService from './services/vercel-integration.service.mjs';
 import vercelSentinel from './services/vercel-sentinel.service.mjs';
-import chatService from './services/chat.service.mjs';
+import agentService from './agent/index.mjs';
 import requireAuth from './middleware/auth.mjs';
 
 dotenv.config();
@@ -61,11 +61,19 @@ app.post('/api/chat', requireAuth, async (req, res) => {
         }
 
         // userId comes from the verified token only — never from the request body.
-        const response = await chatService.processMessage(req.auth.userId, message);
-        res.json({ response });
+        const result = await agentService.processMessage(req.auth.userId, message);
+
+        res.json({
+            response: result.text,
+            ok: result.ok,
+            stopReason: result.stopReason,
+            // What actually ran, so the client never has to infer it from wording.
+            performed: result.performed,
+            budget: result.budget
+        });
     } catch (error) {
         console.error('Chat API Error:', error);
-        res.status(500).json({ error: 'Ulla is having trouble thinking right now.' });
+        res.status(500).json({ error: `The run failed: ${error.message}` });
     }
 });
 

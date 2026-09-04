@@ -1,48 +1,104 @@
-const base = '../../src/services/';
-const chatService = (await import(base + 'chat.service.mjs')).default;
-const aiGateway   = (await import(base + 'ai.service.mjs')).default;
-const db          = (await import(base + 'database.service.mjs')).default;
-const logger      = (await import(base + 'logger.service.mjs')).default;
+import { runAgent, describeOutcome } from '../../src/agent/loop.mjs';
+import { ToolRegistry } from '../../src/agent/registry.mjs';
+import { ok, fail, system, user } from '../../src/providers/messages.mjs';
+import { check, report } from './harness.mjs';
 
-// Keep the test offline and quiet.
-db.getRecentActivity = async () => [];
-db.getInstallationIdByRepo = async () => null;
-logger.log = async () => {};
+/**
+ * The agent must never report success for work it did not perform.
+ *
+ * The old fallback path ran a single stateless completion, threw away the tool
+ * calls it came back with, and replied "✅ Task completed via fallback provider".
+ * Under a rate limit it claimed to have done things it had not done.
+ */
 
-let failures = 0;
-const check = (label, cond, got) => {
-  console.log(`${cond ? 'PASS' : 'FAIL'} — ${label}`);
-  if (!cond) { failures++; console.log('    got: ' + JSON.stringify(got)); }
-};
+const baseMessages = [system('You are a test agent.'), user('delete my old repo')];
 
-// Force the primary model to look rate-limited.
-const rateLimited = () => {
-  const e = new Error('429 Too Many Requests: rate limit exceeded');
-  e.status = 429;
-  throw e;
-};
-chatService.model = { startChat: () => ({ sendMessage: rateLimited }) };
-chatService.sessions.clear();
-
-// ── Case 1: the backup provider wants to run tools it cannot execute ──────────
-aiGateway.agentChat = async () => ({
-  text: '',
-  toolCalls: [{ function: { name: 'delete_repository' } }],
-  provider: 'groq'
+const registry = new ToolRegistry().register({
+    name: 'do_thing',
+    description: 'Does a thing.',
+    parameters: { type: 'object', properties: {} },
+    handler: async () => ok({ done: true })
 });
-const r1 = await chatService.processMessage('u1', 'delete my old test repo');
-check('does not claim success when nothing ran', !r1.includes('✅'), r1);
-check('says it could not complete the task', /could not complete/i.test(r1), r1);
-check('states plainly that nothing was executed', /nothing was executed/i.test(r1), r1);
-check('names the tool it wanted to run', r1.includes('delete_repository'), r1);
 
-// ── Case 2: the backup returns nothing at all ─────────────────────────────────
-aiGateway.agentChat = async () => ({ text: '', toolCalls: [], provider: 'groq' });
-chatService.sessions.clear();
-const r2 = await chatService.processMessage('u2', 'summarize my latest commit');
-check('empty fallback is reported honestly', /could not complete/i.test(r2) && !r2.includes('✅'), r2);
-check('no actions were taken is stated', /no actions were taken/i.test(r2), r2);
+// ── 1. Every provider is down ───────────────────────────────────────────────
+{
+    const router = {
+        async complete() {
+            const e = new Error('All providers failed. gemini: 429 rate limit | groq: 429 rate limit');
+            e.code = 'ALL_PROVIDERS_FAILED';
+            throw e;
+        }
+    };
 
-console.log('\n--- sample response ---\n' + r1);
-console.log(failures === 0 ? '\nAll honesty checks passed.' : `\n${failures} check(s) failed.`);
-process.exit(failures === 0 ? 0 : 1);
+    const result = await runAgent({ messages: baseMessages, registry, router, context: {} });
+
+    check('a total provider outage is not a success', result.ok === false);
+    check('the failure is reported to the user', /failed/i.test(result.text), result.text);
+    check('it states that nothing was done', /no actions were taken/i.test(result.text), result.text);
+    check('it does not use a success marker', !result.text.includes('✅'));
+    check('nothing was recorded as performed', result.performed.length === 0);
+}
+
+// ── 2. The provider dies after some work has already happened ───────────────
+{
+    let turn = 0;
+    const router = {
+        async complete() {
+            turn++;
+            if (turn === 1) {
+                return { text: '', toolCalls: [{ id: 't1', name: 'do_thing', args: {} }], usage: {} };
+            }
+            throw new Error('429 rate limit exceeded');
+        }
+    };
+
+    const result = await runAgent({ messages: baseMessages, registry, router, context: {} });
+
+    check('a mid-run outage is not a success', result.ok === false);
+    check('completed work is still reported', result.text.includes('do_thing'), result.text);
+    check('the failure is stated plainly', /failed/i.test(result.text));
+    check('the completed action is recorded once', result.performed.length === 1);
+}
+
+// ── 3. A model that stops without a closing message ─────────────────────────
+// The old code filled this silence with "✅ Execution Complete!" regardless of
+// whether the tools had actually succeeded.
+{
+    const failingRegistry = new ToolRegistry().register({
+        name: 'push_file',
+        description: 'Pushes a file.',
+        parameters: { type: 'object', properties: {} },
+        handler: async () => fail('FORBIDDEN', 'Resource not accessible by integration')
+    });
+
+    let turn = 0;
+    const router = {
+        async complete() {
+            turn++;
+            return turn === 1
+                ? { text: '', toolCalls: [{ id: 't1', name: 'push_file', args: {} }], usage: {} }
+                : { text: '', toolCalls: [], usage: {} };
+        }
+    };
+
+    const result = await runAgent({ messages: baseMessages, registry: failingRegistry, router, context: {} });
+
+    check('a failed tool is listed under Failed', /Failed:/.test(result.text), result.text);
+    check('a failed tool is not listed under Completed', !/Completed:[\s\S]*push_file/.test(result.text), result.text);
+}
+
+// ── 4. The outcome summary never invents success ────────────────────────────
+{
+    const cancelled = describeOutcome({
+        stopReason: 'cancelled',
+        text: '',
+        performed: [{ name: 'push_file', ok: true }]
+    });
+    check('a cancelled run says it was cancelled', /cancelled/i.test(cancelled), cancelled);
+    check('a cancelled run still reports what completed', cancelled.includes('push_file'));
+
+    const empty = describeOutcome({ stopReason: 'completed', text: '', performed: [] });
+    check('doing nothing is stated as nothing', /did not take any action/i.test(empty), empty);
+}
+
+report('honest failure reporting');

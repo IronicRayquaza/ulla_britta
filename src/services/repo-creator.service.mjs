@@ -1,7 +1,4 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import githubService from './github.service.mjs';
-import databaseService from './database.service.mjs';
-import { sendEmail } from './email.service.mjs';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -42,41 +39,6 @@ class RepoCreatorService {
         if (!jsonMatch) throw new Error("AI failed to generate valid project structure.");
         
         return JSON.parse(jsonMatch[0]);
-    }
-
-    /**
-     * Creates and pushes a repository.
-     */
-    async createAndPush(userId, repoName, description, files) {
-        // 1. Get GitHub Installation
-        const installationId = await databaseService.getInstallationIdByRepo(repoName, userId);
-        if (!installationId) throw new Error("GitHub App not installed for this user.");
-
-        // 2. Create the Repo
-        console.log(`🏗️ Creating repo: ${repoName}...`);
-        const client = await githubService.getClient(installationId);
-        await githubService.createRepository(client, repoName, description);
-        
-        // 3. Push files
-        for (const [path, content] of Object.entries(files)) {
-            await githubService.pushFile(
-                'IronicRayquaza', // Owner
-                repoName,
-                path,
-                content,
-                'Initial commit by Ulla Britta Architect',
-                installationId
-            );
-        }
-
-        // 4. Send confirmation email
-        await sendEmail({
-            to: 'satyam4698@gmail.com',
-            subject: `🚀 Repo Created: ${repoName}`,
-            text: `Ulla Britta has successfully scaffolded and pushed your new project: ${repoName}.\n\nStack: ${description}`
-        });
-
-        return `https://github.com/IronicRayquaza/${repoName}`;
     }
 }
 

@@ -252,6 +252,26 @@ class DatabaseService {
         return null;
     }
   /**
+   * The email address this user chose during onboarding.
+   * Returns null when there is none, so callers can decide whether to fall back.
+   */
+  async getUserEmail(userId) {
+    if (!this.client || !userId) return null;
+    const { data, error } = await this.client
+      .from('user_preferences')
+      .select('email, email_enabled')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn(`⚠️ Could not read email preference for ${userId}: ${error.message}`);
+      return null;
+    }
+    if (!data || data.email_enabled === false) return null;
+    return data.email || null;
+  }
+
+  /**
    * Fetches recent activity for a user (fixes and deployments).
    */
   async getRecentActivity(userId, limit = 10) {
