@@ -60,8 +60,15 @@ class VercelSentinel {
 
         // 2. Resolve the Full Repository Name and GitHub Installation ID
         // Vercel meta often has githubCommitOrg and githubCommitRepo
-        const repoOwner = deployment.meta?.githubCommitOrg || deployment.meta?.githubOrg || 'IronicRayquaza';
-        const repoName = deployment.meta?.githubCommitRepo || deployment.meta?.githubRepo || deployment.name;
+        // No hardcoded owner fallback: guessing the operator's own account would
+        // point one user's deployment failure at another user's repository.
+        const repoOwner = deployment.meta?.githubCommitOrg || deployment.meta?.githubOrg;
+        const repoName = deployment.meta?.githubCommitRepo || deployment.meta?.githubRepo;
+
+        if (!repoOwner || !repoName) {
+            console.warn(`⚠️ Deployment ${deployment.uid} has no linked GitHub repository; skipping.`);
+            return;
+        }
         const fullRepo = `${repoOwner}/${repoName}`;
 
         // Get the GitHub Installation ID linked to this user

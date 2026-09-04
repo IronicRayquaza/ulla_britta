@@ -184,13 +184,34 @@ class GitHubService {
       }
   }
 
-  verifySignature(payloadString, signature) {
-      if (!signature) return false;
-      const hmac = crypto.createHmac('sha256', process.env.GITHUB_WEBHOOK_SECRET);
-      const digest = 'sha256=' + hmac.update(payloadString).digest('hex');
+  /**
+   * Verifies a GitHub webhook signature against the RAW request bytes.
+   *
+   * The caller must pass the untouched body. Re-serialising a parsed body does not
+   * reliably reproduce what GitHub signed, so a valid delivery could be rejected
+   * over key ordering or unicode escaping alone.
+   */
+  verifySignature(rawBody, signature) {
+      if (!signature || !rawBody) return false;
+      if (!process.env.GITHUB_WEBHOOK_SECRET) {
+          console.error('❌ GITHUB_WEBHOOK_SECRET is not set; rejecting all webhooks.');
+          return false;
+      }
+
+      const payload = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(String(rawBody), 'utf8');
+      const digest = 'sha256=' + crypto
+          .createHmac('sha256', process.env.GITHUB_WEBHOOK_SECRET)
+          .update(payload)
+          .digest('hex');
+
+      const expected = Buffer.from(digest);
+      const provided = Buffer.from(String(signature));
+      // timingSafeEqual throws on a length mismatch, so check that first.
+      if (expected.length !== provided.length) return false;
+
       try {
-          return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signature));
-      } catch (e) {
+          return crypto.timingSafeEqual(expected, provided);
+      } catch {
           return false;
       }
   }

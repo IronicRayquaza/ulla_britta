@@ -1,5 +1,6 @@
 import queueService from './queue.mjs';
 import { processEvent } from './processor.mjs';
+import vercelSentinel from './services/vercel-sentinel.service.mjs';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -31,6 +32,33 @@ const MAX_ATTEMPTS = 3;
 console.log('🤖 Ulla Britta Worker is standing by...');
 
 let isShuttingDown = false;
+
+/**
+ * The Vercel Sentinel lives here rather than in the web process: it polls, and
+ * then does long repair work. A web dyno that sleeps between requests would never
+ * run it reliably, and a request-serving process is the wrong place for it anyway.
+ */
+const SENTINEL_INTERVAL_MS = Number(process.env.SENTINEL_INTERVAL_MS || 2 * 60 * 1000);
+let sentinelRunning = false;
+
+async function runSentinel() {
+    // Never overlap: a slow pass must not start a second one on top of itself.
+    if (sentinelRunning || isShuttingDown) return;
+    sentinelRunning = true;
+    try {
+        await vercelSentinel.checkForFailures();
+    } catch (err) {
+        console.error(`Sentinel error: ${err.message}`);
+    } finally {
+        sentinelRunning = false;
+    }
+}
+
+if (process.env.DISABLE_SENTINEL !== 'true') {
+    setInterval(runSentinel, SENTINEL_INTERVAL_MS).unref();
+    runSentinel();
+}
+
 let currentTask = null;
 
 process.on('SIGTERM', async () => {

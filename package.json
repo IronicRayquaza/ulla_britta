@@ -7,7 +7,8 @@
     "test:simulate": "node test/simulate_webhook.js",
     "test": "node test/safety/run.mjs",
     "worker": "node src/worker.mjs",
-    "web": "node src/index.mjs"
+    "web": "node src/index.mjs",
+    "maintenance": "node src/maintenance.mjs"
   },
   "keywords": [],
   "author": "",

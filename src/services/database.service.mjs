@@ -103,16 +103,15 @@ class DatabaseService {
 
         console.log(`📡 DB: Target URL is ${SUPABASE_URL?.substring(0, 20)}...`);
 
-        // 0. Ensure a dummy profile exists to satisfy Foreign Key constraints
-        console.log(`📡 DB: Ensuring profile exists for ${userId}...`);
-        const { error: profErr } = await this.client.from('profiles').upsert({ 
-            id: userId, 
-            username: 'IronicRayquaza',
-            email: 'admin@ulla-britta.agent' // Added email just in case it's required
-        });
+        // Make sure a profile row exists to satisfy the foreign key. It previously
+        // wrote username: 'IronicRayquaza' and a placeholder email for EVERY user,
+        // stamping the operator's identity onto every account that connected Vercel.
+        const { error: profErr } = await this.client
+            .from('profiles')
+            .upsert({ user_id: userId }, { onConflict: 'user_id' });
 
         if (profErr) {
-            console.warn(`⚠️ Profile Creation Warning (Might exist): ${profErr.message}`);
+            console.warn(`⚠️ Could not ensure profile for ${userId}: ${profErr.message}`);
         }
 
         console.log(`📡 DB: Attempting to store integration for ${userId}...`);
@@ -213,43 +212,84 @@ class DatabaseService {
     /**
      * Look up the GitHub Installation ID for a repository.
      */
+    /**
+     * The installation this user has that covers `repoFullName`.
+     *
+     * Every lookup is scoped to the user. The previous version matched on
+     * account_login WITHOUT filtering by user_id, so a repository name belonging to
+     * another tenant resolved to that tenant's installation — and when that missed,
+     * it fell back to "any installation linked to this user", which handed back a
+     * client for an account the repository did not belong to.
+     *
+     * @param {string} repoFullName - "owner/repo", or "" to resolve the user's own
+     *                                installation when no repository is in play.
+     * @param {string} userId       - Required. Without it there is no tenant to scope to.
+     */
     async getInstallationIdByRepo(repoFullName, userId) {
         if (!this.client) return null;
-        
-        const login = repoFullName.split('/')[0];
-        console.log(`📡 DB: Searching for GitHub Installation for login: "${login}" or user: ${userId}`);
 
-        // 1. Try by repo owner name (Case-Insensitive)
-        let { data, error } = await this.client
-            .from('github_installations')
-            .select('installation_id, account_login')
-            .ilike('account_login', login)
-            .maybeSingle();
-
-        if (data?.installation_id) {
-            console.log(`✅ DB: Found Installation ID ${data.installation_id} for ${data.account_login}`);
-            return data.installation_id;
+        if (!userId) {
+            console.warn('❌ DB: Installation lookup attempted without a user. Refusing.');
+            return null;
         }
 
-        if (error) console.error('📊 DB Error (Installation Lookup):', error.message);
+        const login = (repoFullName || '').split('/')[0];
 
-        // 2. Fallback: Get ANY installation linked to this dashboard user
-        if (userId) {
-            const { data: userInst } = await this.client
+        // 1. An installation this user owns, on the account that owns the repository.
+        if (login) {
+            const { data, error } = await this.client
+                .from('github_installations')
+                .select('installation_id, account_login')
+                .eq('user_id', userId)
+                .ilike('account_login', login)
+                .maybeSingle();
+
+            if (error) console.error('📊 DB Error (installation lookup):', error.message);
+            if (data?.installation_id) return data.installation_id;
+        }
+
+        // 2. No repository named: the user's own installation. When a repository WAS
+        //    named and did not match, we stop here — falling through to an unrelated
+        //    installation is how cross-tenant access happens.
+        if (!login) {
+            const { data } = await this.client
                 .from('github_installations')
                 .select('installation_id')
                 .eq('user_id', userId)
+                .order('installed_at', { ascending: false })
                 .limit(1)
                 .maybeSingle();
-            
-            if (userInst?.installation_id) {
-                console.log(`✅ DB: Found Fallback Installation ID ${userInst.installation_id} for user ${userId}`);
-                return userInst.installation_id;
-            }
+
+            if (data?.installation_id) return data.installation_id;
         }
 
-        console.warn(`❌ DB: No GitHub Installation found for "${login}" in the database.`);
+        console.warn(`❌ DB: No installation for user ${userId}${login ? ` covering "${login}"` : ''}.`);
         return null;
+    }
+
+    /**
+     * Records which GitHub account a dashboard user owns.
+     *
+     * Nothing wrote profiles.github_username before, yet getUserIdByGithubUsername
+     * reads it to attribute incoming webhooks — so every webhook fell through to the
+     * anonymous system user and its logs reached nobody's dashboard.
+     */
+    async linkGithubAccount(userId, githubUsername) {
+        if (!this.client || !userId || !githubUsername) return;
+
+        const { error } = await this.client
+            .from('profiles')
+            .upsert({
+                user_id: userId,
+                github_username: githubUsername,
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'user_id' });
+
+        if (error) {
+            console.error(`❌ DB: Could not link GitHub account ${githubUsername}: ${error.message}`);
+            throw new Error(`Could not link the GitHub account: ${error.message}`);
+        }
+        console.log(`✅ DB: ${githubUsername} linked to user ${userId}`);
     }
   /**
    * The email address this user chose during onboarding.

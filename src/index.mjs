@@ -31,7 +31,14 @@ app.use(cors({
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express.json());
+// Keep the exact bytes of the request for signature verification. Re-serialising
+// the parsed body with JSON.stringify does not reliably reproduce what was signed,
+// so a valid webhook could be rejected on nothing more than key ordering or
+// unicode escaping.
+app.use(express.json({
+    limit: '10mb',
+    verify: (req, _res, buf) => { req.rawBody = buf; }
+}));
 app.use(express.static('public')); // Serve the dashboard
 
 // Durable runs: start, watch, cancel, and read history.
@@ -120,6 +127,11 @@ app.post('/github/link-installation', requireAuth, async (req, res) => {
             last_sync_at: new Date().toISOString()
         }, { onConflict: 'installation_id' });
 
+        // Record the GitHub account on the profile too. Without this, incoming
+        // webhooks cannot be attributed to a user: getUserIdByGithubUsername reads
+        // profiles.github_username, and nothing was ever writing it.
+        await databaseService.linkGithubAccount(userId, install.account.login);
+
         await logger.info(`✅ GitHub App linked: ${install.account.login} (installation ${installationId}) → user ${userId}`);
         res.json({ success: true, account: install.account.login });
     } catch (err) {
@@ -130,12 +142,8 @@ app.post('/github/link-installation', requireAuth, async (req, res) => {
 
 
 // Start the Vercel Sentinel (Polls every 2 minutes)
-setInterval(() => {
-    vercelSentinel.checkForFailures().catch(err => console.error('Sentinel Error:', err));
-}, 2 * 60 * 1000);
-
-// Run once immediately on startup
-vercelSentinel.checkForFailures().catch(err => console.error('Sentinel Startup Error:', err));
+// The Vercel Sentinel polls and then performs long-running repair work, so it runs
+// in the worker (see src/worker.mjs), not in the request-serving process.
 
 // Vercel OAuth Callback
 app.get('/vercel/callback', async (req, res) => {
@@ -182,10 +190,14 @@ app.post('/webhooks/vercel', async (req, res) => {
     if (signature && VERCEL_SECRET) {
         const expectedSignature = crypto
             .createHmac('sha256', VERCEL_SECRET)
-            .update(JSON.stringify(req.body))
+            .update(req.rawBody ?? Buffer.from(JSON.stringify(req.body)))
             .digest('hex');
 
-        if (signature !== expectedSignature) {
+        // Constant-time comparison: a plain !== leaks how much of the signature
+        // matched through timing.
+        const provided = Buffer.from(String(signature));
+        const expected = Buffer.from(expectedSignature);
+        if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
             return res.status(401).send('Invalid Vercel signature');
         }
     }
@@ -215,7 +227,7 @@ app.post('/webhook', async (req, res) => {
     const payload = req.body;
     const repository = payload.repository?.full_name;
 
-    if (!githubService.verifySignature(JSON.stringify(payload), signature)) {
+    if (!githubService.verifySignature(req.rawBody, signature)) {
         return res.status(401).send('Invalid signature');
     }
 
@@ -269,30 +281,10 @@ app.post('/webhook', async (req, res) => {
     res.status(202).send({ taskId });
 });
 
-// ==========================================
-// BACKGROUND CRON JOBS (Sentinel Loop)
-// ==========================================
-setInterval(async () => {
-    try {
-        console.log("⏰ Running Daily Sentinel Maintenance...");
-        const integrations = await databaseService.getAllIntegrations();
-        for (const integration of integrations) {
-            const { github_username } = integration;
-            const client = await githubService.getClientForOrg(github_username);
-            const { data: repos } = await client.rest.repos.listForAuthenticatedUser();
-            
-            for (const repo of repos) {
-                const repoFullName = repo.full_name;
-                // Enqueue the daily maintenance tasks
-                await enqueueTask('update_dependencies', { repository: { full_name: repoFullName } });
-                await enqueueTask('check_repo_health', { repository: { full_name: repoFullName } });
-                await enqueueTask('clean_stale_issues', { repository: { full_name: repoFullName } });
-            }
-        }
-    } catch (e) {
-        console.error("❌ Daily Maintenance Failed:", e.message);
-    }
-}, 24 * 60 * 60 * 1000); // Run every 24 hours
+// Scheduled work does NOT live here. A setInterval in the web process does not
+// fire on a service that sleeps between requests, and it called a method
+// (getAllIntegrations) that no longer exists. Run `npm run maintenance` from a
+// platform cron job instead — see src/maintenance.mjs.
 
 // Deployment Approval Endpoint (One-Click Trigger)
 app.get('/approve-deployment', async (req, res) => {

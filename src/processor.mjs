@@ -203,7 +203,9 @@ Since this repository is a fork of **${upstreamFullName}**, where would you like
 
         else if (type === 'route_pr') {
             const commentBody = payload.comment.body.trim();
-            const client = await githubService.getClientForOrg(payload.repository.owner.login);
+            // Use the installation the webhook came from, not one looked up by owner
+            // name with app-level credentials.
+            const client = await githubService.getClient(installationId);
             
             const { data: comments } = await client.rest.issues.listComments({
                 owner: payload.repository.owner.login,

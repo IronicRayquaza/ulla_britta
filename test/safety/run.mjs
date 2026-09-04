@@ -24,7 +24,8 @@ const suites = [
     'honest-failure.test.mjs',
     'runs.test.mjs',
     'diff.test.mjs',
-    'pr.test.mjs'
+    'pr.test.mjs',
+    'tenancy.test.mjs'
 ];
 
 let failed = 0;
