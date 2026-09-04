@@ -21,7 +21,20 @@ class ChatService {
         
         // Pending plan awaiting user approval { plan, repoContext }
         this.pendingPlan = null;
-        this.autopilotActive = false;
+
+        // Tools that cause irreversible damage. These are never executed on the first
+        // call — the executor returns a confirmation request instead, and only runs once
+        // the user has explicitly confirmed. Enforced in code, not in the prompt, because
+        // a prompt is not a safety mechanism.
+        this.destructiveTools = new Set(['delete_repository']);
+
+        // Destructive actions awaiting explicit confirmation, keyed by userId.
+        this.pendingConfirmations = new Map();
+
+        // Monotonic per-user turn counter. A confirmation is only valid if it was
+        // raised on an EARLIER turn, so the agent cannot request and satisfy its own
+        // confirmation inside a single loop.
+        this.turnCounter = new Map();
         this.tools = [
             {
                 functionDeclarations: [
@@ -221,6 +234,9 @@ class ChatService {
 
     async processMessage(userId, message) {
         try {
+            // Advance this user's turn. Confirmations raised on earlier turns become valid now.
+            this.turnCounter.set(userId, (this.turnCounter.get(userId) || 0) + 1);
+
             logger.setContext(userId, null, 'chat-processor');
             await logger.info(`📥 Neural link received message: "${message.substring(0, 50)}..."`);
 
@@ -290,7 +306,19 @@ class ChatService {
                         { role: 'user', content: message }
                     ];
                     const fallbackResult = await aiGateway.agentChat(fallbackMessages, this.tools);
-                    return fallbackResult.text || '✅ Task completed via fallback provider.';
+
+                    // The fallback path is a single stateless completion — it cannot execute
+                    // tool calls. Never report success for work that was not performed.
+                    if (fallbackResult.toolCalls?.length > 0) {
+                        const wanted = fallbackResult.toolCalls
+                            .map(c => '`' + (c.function?.name || c.name) + '`')
+                            .join(', ');
+                        await logger.warn('⚠️ Fallback provider requested tools it cannot execute. Reporting honestly.');
+                        return `⚠️ **I could not complete that.** My primary model is rate-limited, and the backup provider can only talk, not act. It wanted to run: ${wanted}.\n\n**Nothing was executed.** Please retry in a minute.`;
+                    }
+
+                    return fallbackResult.text
+                        || '⚠️ I could not complete that — my primary model is rate-limited and the backup returned nothing. **No actions were taken.**';
                 }
                 throw initErr;
             }
@@ -348,7 +376,18 @@ class ChatService {
                             ...allSummaries.map(s => ({ role: 'assistant', content: `Executed tool ${s.tool}: ${JSON.stringify(s.result).substring(0, 200)}` }))
                         ];
                         const fbResult = await aiGateway.agentChat(fbMessages, this.tools);
-                        return fbResult.text || `✅ Completed ${allSummaries.length} action(s) via fallback provider.`;
+
+                        // Report only what actually ran before the primary model failed.
+                        const done = allSummaries.length > 0
+                            ? '**Completed before the interruption:**\n' + allSummaries.map(x => '- `' + x.tool + '`').join('\n') + '\n\n'
+                            : '';
+
+                        if (fbResult.toolCalls?.length > 0) {
+                            return done + '⚠️ **I could not finish.** My primary model became rate-limited mid-task and the backup provider cannot execute tools. **No further actions were taken.**';
+                        }
+                        return fbResult.text
+                            ? done + fbResult.text
+                            : done + '⚠️ I could not finish — my primary model became rate-limited mid-task. **No further actions were taken.**';
                     }
                     throw roundErr;
                 }
@@ -396,8 +435,39 @@ class ChatService {
         return `**✅ Execution Complete!**\n\n${results.join('\n')}\n\n_All tasks processed. Check your email for detailed reports._`;
     }
 
+    /**
+     * Returns true if this exact destructive action has been confirmed by the user.
+     * Consumes the confirmation so it cannot be replayed.
+     */
+    consumeConfirmation(userId, name, args) {
+        const pending = this.pendingConfirmations.get(userId);
+        if (!pending) return false;
+        const matches = pending.name === name
+            && JSON.stringify(pending.args) === JSON.stringify(args)
+            && Date.now() - pending.at < 5 * 60 * 1000       // confirmations expire after 5 minutes
+            && pending.turn < (this.turnCounter.get(userId) || 0); // must predate the current turn
+        if (matches) this.pendingConfirmations.delete(userId);
+        return matches;
+    }
+
     async executeTool(userId, name, args) {
         try {
+            // [SAFETY] Irreversible actions require an explicit, matching confirmation.
+            // This is enforced here rather than in the prompt: a hallucinated tool call
+            // must never be able to destroy anything on its own.
+            if (this.destructiveTools.has(name) && !this.consumeConfirmation(userId, name, args)) {
+                this.pendingConfirmations.set(userId, {
+                    name, args,
+                    at: Date.now(),
+                    turn: this.turnCounter.get(userId) || 0
+                });
+                await logger.warn(`🛑 Destructive tool "${name}" blocked pending confirmation.`);
+                return `CONFIRMATION_REQUIRED: "${name}" is irreversible and was NOT executed. `
+                    + `Target: ${JSON.stringify(args)}. Tell the user exactly what will be destroyed `
+                    + `and ask them to reply "confirm ${name}" to proceed. Do not call this tool again `
+                    + `until they have confirmed.`;
+            }
+
             // [HARDENING] Dynamically resolve GitHub Client based on user installation
             const installationId = await databaseService.getInstallationIdByRepo(args.repoName || '', userId);
             const client = installationId 
@@ -557,30 +627,6 @@ class ChatService {
                     } catch (e) {
                         return `Failed to push custom file: ${e.message}`;
                     }
-
-                case 'audit_all_repos':
-                    try {
-                        const allRepos = await githubService.listUserRepos(client);
-                        await logger.info(`🔍 Cross-repo audit started for ${allRepos.length} repositories...`);
-                        const auditResults = [];
-                        // Audit top 5 most recently active repos to avoid rate limiting
-                        const topRepos = allRepos
-                            .sort((a, b) => new Date(b.pushed_at) - new Date(a.pushed_at))
-                            .slice(0, 5);
-                        for (const repo of topRepos) {
-                            const health = await advancedWorkflowsService.checkRepoHealth(repo.full_name);
-                            auditResults.push(`### ${repo.full_name}\n${health}`);
-                        }
-                        await logger.success('✅ Cross-repo audit complete!');
-                        return auditResults.join('\n\n---\n\n');
-                    } catch (e) {
-                        return `Audit failed: ${e.message}`;
-                    }
-
-                case 'enable_autopilot':
-                    this.autopilotActive = true;
-                    await logger.success('✅ Autopilot Mode activated!');
-                    return `**🛰️ Autopilot Mode Activated!**\n\nI am now your full-time DevOps engineer. Here is what I will do continuously:\n\n- **Hourly:** Security scan across all repos\n- **Daily:** Dependency updates → auto-merge if tests pass\n- **Weekly:** Close stale issues, archive dead repos\n- **On every PR:** Automated code review\n\nYou can check the SYSTEM_LOGS panel at any time to see what I'm working on. Say **"disable autopilot"** to stop.`;
 
                 default:
                     return "Error: Unknown tool.";

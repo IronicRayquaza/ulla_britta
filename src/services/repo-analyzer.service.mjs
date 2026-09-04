@@ -37,7 +37,10 @@ class RepositoryAnalyzer {
             );
             return repoPath;
         } catch (e) {
-            console.error(`❌ Clone failed: ${e.message}`);
+            // git echoes the remote URL back in its error output, and that URL carries
+            // the installation token. Redact any credentials before this reaches a log.
+            const safe = String(e.message || '').replace(/https:\/\/[^@\s]+@/g, 'https://***@');
+            console.error(`❌ Clone failed for ${owner}/${repo}: ${safe}`);
             return null;
         }
     }

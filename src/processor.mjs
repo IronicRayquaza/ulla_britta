@@ -111,7 +111,13 @@ export async function processEvent(event) {
                 await sendEmail(result.report_markdown, repository);
                 await logger.success(`Vercel auto-fix applied! Triggering redeploy...`);
                 await vercelService.triggerRedeploy(payload.deployment_id);
+                // Returned so callers (the Sentinel) can distinguish an applied fix
+                // from "ran but produced nothing".
+                return result;
             }
+
+            await logger.warn(`No auto-fix could be produced for ${payload.project_name}. Nothing was changed.`);
+            return null;
         }
 
         else if (type === 'feature_request') {

@@ -7,6 +7,14 @@ import { processEvent } from '../processor.mjs';
  * Polls Vercel for failures. Uses DB to prevent duplicates.
  */
 class VercelSentinel {
+    constructor() {
+        // Only look at failures from the recent past. Previously this scanned every
+        // ERROR deployment ever recorded (since=0) and leaned entirely on the dedupe
+        // table, which floods on the first poll for a new account.
+        this.lookbackMs = 6 * 60 * 60 * 1000; // 6 hours
+        this.lastPollAt = null;
+    }
+
     /**
      * Scan all active Vercel integrations for new errors.
      */
@@ -17,9 +25,11 @@ class VercelSentinel {
             
             if (!integrations || integrations.length === 0) return;
 
+            const pollStartedAt = new Date();
             for (const integration of integrations) {
                 await this.checkUserDeployments(integration);
             }
+            this.lastPollAt = pollStartedAt;
         } catch (error) {
             console.error('❌ Sentinel Patrol Error:', error.message);
         }
@@ -28,7 +38,8 @@ class VercelSentinel {
     async checkUserDeployments(integration) {
         try {
             const vercel = new VercelService(integration.access_token, integration.team_id);
-            const failures = await vercel.getFailedDeployments(null); 
+            const since = this.lastPollAt || new Date(Date.now() - this.lookbackMs);
+            const failures = await vercel.getFailedDeployments(since);
 
             console.log(`📡 Sentinel: User ${integration.user_id} has ${failures.length} ERROR deployments on Vercel.`);
 
@@ -70,21 +81,35 @@ class VercelSentinel {
         const event = {
             type: 'vercel_failure', 
             payload: {
-                deploymentId: deployment.uid,
+                // NOTE: these key names must match what processor.mjs reads for
+                // 'vercel_failure'. They previously did not, so getDeploymentLogs()
+                // was always called with undefined and this path never worked.
+                deployment_id: deployment.uid,
                 deploymentUrl: deployment.url,
+                project_name: deployment.name,
                 projectId: deployment.projectId,
-                projectName: deployment.name,
                 repository: fullRepo,
+                branch: deployment.meta?.githubCommitRef || 'main',
+                commit: deployment.meta?.githubCommitSha,
                 installationId: installationId,
                 userId: integration.user_id
             }
         };
 
         try {
-            await processEvent(event);
-            // ✅ Only update to 'fixed' after a confirmed successful processEvent
-            await databaseService.updateDeploymentStatus(deployment.uid, 'fixed');
-            console.log(`✅ Sentinel: Fix confirmed for ${deployment.uid}`);
+            // processEvent returns the diagnostics result for vercel_failure, or
+            // undefined when it bailed out (no logs, unparseable fix, commit failed).
+            // "Did not throw" is NOT the same as "fixed" — only claim a fix when one
+            // was actually applied.
+            const outcome = await processEvent(event);
+
+            if (outcome && outcome.report_markdown) {
+                await databaseService.updateDeploymentStatus(deployment.uid, 'fixed');
+                console.log(`✅ Sentinel: Fix confirmed for ${deployment.uid}`);
+            } else {
+                await databaseService.updateDeploymentStatus(deployment.uid, 'no_fix');
+                console.warn(`⚠️ Sentinel: No fix could be produced for ${deployment.uid}.`);
+            }
         } catch (fixErr) {
             // ❌ Honest failure — mark as failed so user knows it was NOT fixed
             await databaseService.updateDeploymentStatus(deployment.uid, 'failed');

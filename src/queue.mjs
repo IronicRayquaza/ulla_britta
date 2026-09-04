@@ -1,6 +1,6 @@
 import Redis from 'ioredis';
 import dotenv from 'dotenv';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 
 dotenv.config();
 
@@ -14,7 +14,7 @@ class QueueService {
     }
 
     async enqueue(type, payload) {
-        const taskId = uuidv4();
+        const taskId = randomUUID();
         const task = { id: taskId, type, payload, timestamp: new Date().toISOString() };
         await this.client.lpush(QUEUE_NAME, JSON.stringify(task));
         return taskId;

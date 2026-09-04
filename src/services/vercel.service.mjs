@@ -49,9 +49,12 @@ export class VercelService {
         const sinceTimestamp = since ? since.getTime() : 0;
         const url = `${this.baseUrl}/v6/deployments`;
         
+        // Filter server-side as well as client-side, so the 20-item page isn't
+        // consumed by old failures we are going to discard anyway.
         const params = new URLSearchParams({
             limit: '20',
             state: 'ERROR',
+            ...(sinceTimestamp > 0 && { since: String(sinceTimestamp) }),
             ...(this.teamId && { teamId: this.teamId })
         });
 

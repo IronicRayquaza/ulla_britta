@@ -12,12 +12,21 @@ import vercelService from './services/vercel.service.mjs';
 import vercelIntegrationService from './services/vercel-integration.service.mjs';
 import vercelSentinel from './services/vercel-sentinel.service.mjs';
 import chatService from './services/chat.service.mjs';
+import requireAuth from './middleware/auth.mjs';
 
 dotenv.config();
 
 const app = express();
+// Allowed browser origins. FRONTEND_URL should be set to the deployed dashboard
+// origin (comma-separated if there is more than one).
+const ALLOWED_ORIGINS = [
+    'http://localhost:3000',
+    'https://ulla-britta.onrender.com',
+    ...(process.env.FRONTEND_URL || '').split(',').map(o => o.trim()).filter(Boolean)
+];
+
 app.use(cors({
-    origin: ['http://localhost:3000', 'https://ulla-britta.onrender.com'],
+    origin: ALLOWED_ORIGINS,
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -25,9 +34,9 @@ app.use(express.json());
 app.use(express.static('public')); // Serve the dashboard
 
 // Chat Status Endpoint (For the dashboard status bar)
-app.get('/api/chat/status', async (req, res) => {
+app.get('/api/chat/status', requireAuth, async (req, res) => {
     try {
-        const userId = 'a66ceed4-63a5-405a-85b5-9f8f59946690';
+        const { userId } = req.auth;
         const activity = await databaseService.getRecentActivity(userId, 5);
         const integrations = await databaseService.getAllVercelIntegrations();
 
@@ -43,12 +52,16 @@ app.get('/api/chat/status', async (req, res) => {
 });
 
 // Chat API Endpoint
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', requireAuth, async (req, res) => {
     try {
-        const { message, userId } = req.body;
-        const fallbackId = 'a66ceed4-63a5-405a-85b5-9f8f59946690';
+        const { message } = req.body;
 
-        const response = await chatService.processMessage(userId || fallbackId, message);
+        if (typeof message !== 'string' || message.trim() === '') {
+            return res.status(400).json({ error: 'A non-empty message is required.' });
+        }
+
+        // userId comes from the verified token only — never from the request body.
+        const response = await chatService.processMessage(req.auth.userId, message);
         res.json({ response });
     } catch (error) {
         console.error('Chat API Error:', error);
@@ -58,12 +71,13 @@ app.post('/api/chat', async (req, res) => {
 
 // ── GitHub App Onboarding ──────────────────────────────────────────────────
 // Called by the frontend after GitHub App install redirect returns installation_id
-app.post('/github/link-installation', async (req, res) => {
+app.post('/github/link-installation', requireAuth, async (req, res) => {
     try {
-        const { userId, installationId } = req.body;
+        const { userId } = req.auth;
+        const { installationId } = req.body;
 
-        if (!userId || !installationId) {
-            return res.status(400).json({ error: 'userId and installationId are required' });
+        if (!installationId) {
+            return res.status(400).json({ error: 'installationId is required' });
         }
 
         // Fetch installation details from GitHub to get account_login
@@ -125,7 +139,14 @@ app.get('/vercel/callback', async (req, res) => {
     }
 
     try {
-        const userId = state || 'a66ceed4-63a5-405a-85b5-9f8f59946690';
+        // `state` carries the dashboard user id set when the OAuth flow started.
+        // Without it the integration cannot be attributed to anyone — fail loudly
+        // rather than silently binding it to a hardcoded account.
+        const userId = state;
+        if (!userId) {
+            console.warn('❌ Vercel callback missing state (user id). Refusing to link.');
+            return res.status(400).send('Missing user context. Start the integration from the dashboard.');
+        }
 
         await vercelIntegrationService.exchangeCode(code, userId, configurationId, teamId);
 

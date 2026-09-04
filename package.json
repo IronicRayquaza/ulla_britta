@@ -3,14 +3,16 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "node src/solo_start.mjs",
     "test:simulate": "node test/simulate_webhook.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node test/safety/run.mjs",
+    "worker": "node src/worker.mjs",
+    "web": "node src/index.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Ulla Britta — autonomous GitHub agent (webhook receiver + worker)",
   "type": "module",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",
