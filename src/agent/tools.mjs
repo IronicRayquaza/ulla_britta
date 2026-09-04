@@ -128,6 +128,7 @@ export function buildRegistry() {
 
     registry.register({
         name: 'review_pull_request',
+        sideEffecting: true,
         description: 'Reads the real diff of a pull request and posts a review on GitHub.',
         parameters: {
             type: 'object',
@@ -147,6 +148,7 @@ export function buildRegistry() {
     // ── Writing ──────────────────────────────────────────────────────────────
     registry.register({
         name: 'push_file',
+        sideEffecting: true,
         description: 'Creates or replaces one file in a repository and commits it. Use for CI workflows, config files and other single-file changes.',
         parameters: {
             type: 'object',
@@ -168,6 +170,7 @@ export function buildRegistry() {
 
     registry.register({
         name: 'create_repository',
+        sideEffecting: true,
         description: 'Scaffolds a brand new repository from a project description and pushes the generated files.',
         parameters: {
             type: 'object',
@@ -208,6 +211,7 @@ export function buildRegistry() {
 
     registry.register({
         name: 'fork_repository',
+        sideEffecting: true,
         description: 'Forks a public repository into the user account.',
         parameters: {
             type: 'object',
@@ -224,6 +228,7 @@ export function buildRegistry() {
 
     registry.register({
         name: 'star_repository',
+        sideEffecting: true,
         description: 'Stars a public repository.',
         parameters: {
             type: 'object',
@@ -240,6 +245,7 @@ export function buildRegistry() {
 
     registry.register({
         name: 'build_feature',
+        sideEffecting: true,
         description: 'Opens a labelled issue that triggers the build pipeline: it analyses the repository, writes the change on a branch and opens a pull request. The work happens in the background.',
         parameters: {
             type: 'object',
@@ -284,6 +290,7 @@ export function buildRegistry() {
 
     registry.register({
         name: 'flag_stale_issues',
+        sideEffecting: true,
         description: 'Finds issues with no activity for over 30 days and posts a warning comment on each. Reports exactly how many were flagged.',
         parameters: {
             type: 'object',
@@ -300,6 +307,7 @@ export function buildRegistry() {
     // ── Email ────────────────────────────────────────────────────────────────
     registry.register({
         name: 'send_email',
+        sideEffecting: true,
         description: 'Emails content to the user: a report, generated code, or a summary.',
         parameters: {
             type: 'object',
@@ -320,6 +328,7 @@ export function buildRegistry() {
         name: 'delete_repository',
         description: 'PERMANENTLY deletes a repository. Irreversible. The system requires explicit user confirmation before this can run.',
         destructive: true,
+        sideEffecting: true,
         parameters: {
             type: 'object',
             properties: { repoName: str('Full repository name, e.g. owner/repo') },

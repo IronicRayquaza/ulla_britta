@@ -26,6 +26,9 @@ export class ToolRegistry {
         this.tools.set(tool.name, {
             parameters: { type: 'object', properties: {} },
             destructive: false,
+            // Whether calling this twice does something twice. Read-only tools are
+            // safe to repeat; anything that writes to GitHub or sends mail is not.
+            sideEffecting: false,
             ...tool
         });
         return this;
@@ -37,6 +40,14 @@ export class ToolRegistry {
     /** Provider-neutral schemas, without handlers. */
     specs() {
         return this.list().map(({ name, description, parameters }) => ({ name, description, parameters }));
+    }
+
+    /** Stable key identifying one action, independent of argument ordering. */
+    static idempotencyKey(toolName, args) {
+        const stable = args && typeof args === 'object'
+            ? JSON.stringify(Object.keys(args).sort().map(k => [k, args[k]]))
+            : JSON.stringify(args ?? null);
+        return `${toolName}:${stable}`;
     }
 
     /** Checks required parameters before a handler runs. */
@@ -78,6 +89,21 @@ export class ToolRegistry {
                             + `and ask them to confirm. Do not call this tool again until they have.`
                     }
                 );
+            }
+        }
+
+        // If an earlier attempt of this same run already applied this exact action,
+        // do not apply it again. A retried task must not push the same file twice
+        // or open a second identical pull request.
+        if (tool.sideEffecting && context.alreadyApplied?.size) {
+            const key = ToolRegistry.idempotencyKey(name, args);
+            if (context.alreadyApplied.has(key)) {
+                const previous = context.alreadyApplied.get(key);
+                return ok({
+                    ...(previous?.data || previous || {}),
+                    alreadyApplied: true,
+                    note: 'This exact action was already completed by an earlier attempt of this run and was not repeated.'
+                });
             }
         }
 

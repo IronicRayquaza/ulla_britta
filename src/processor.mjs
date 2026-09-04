@@ -10,10 +10,18 @@ import vercelService from './services/vercel.service.mjs';
 import repoAnalyzer from './services/repo-analyzer.service.mjs';
 import codeGenerator from './services/code-generator.service.mjs';
 import advancedWorkflowsService from './services/advanced-workflows.service.mjs';
+import { executeRun } from './runs/service.mjs';
 import path from 'path';
 
 export async function processEvent(event) {
     const { type, payload } = event;
+
+    // Agent runs are user-initiated and carry their own identity, so they skip the
+    // repository/installation resolution the webhook events below require.
+    if (type === 'chat_run') {
+        return executeRun(payload);
+    }
+
     let installationId = payload.installation?.id || payload.installationId || (payload.installation && typeof payload.installation === 'number' ? payload.installation : null);
     const repository = payload.repository?.full_name || payload.repository;
 

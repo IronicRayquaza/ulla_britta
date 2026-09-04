@@ -87,6 +87,7 @@ export async function runAgent({
                 await emit(EventType.TOOL_RESULT, {
                     name: call.name,
                     id: call.id,
+                    args: call.args,
                     ok: result.ok,
                     result
                 });

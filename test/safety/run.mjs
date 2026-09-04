@@ -21,7 +21,8 @@ const suites = [
     'providers.test.mjs',
     'agent-loop.test.mjs',
     'destructive-gate.test.mjs',
-    'honest-failure.test.mjs'
+    'honest-failure.test.mjs',
+    'runs.test.mjs'
 ];
 
 let failed = 0;

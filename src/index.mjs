@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { enqueueTask } from './queue.mjs';
+import queue, { enqueueTask } from './queue.mjs';
 import githubService from './services/github.service.mjs';
 import deploymentService from './services/deployment.service.mjs';
 import databaseService from './services/database.service.mjs';
@@ -13,6 +13,7 @@ import vercelIntegrationService from './services/vercel-integration.service.mjs'
 import vercelSentinel from './services/vercel-sentinel.service.mjs';
 import agentService from './agent/index.mjs';
 import requireAuth from './middleware/auth.mjs';
+import runsRouter from './routes/runs.mjs';
 
 dotenv.config();
 
@@ -32,6 +33,9 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.static('public')); // Serve the dashboard
+
+// Durable runs: start, watch, cancel, and read history.
+app.use('/api/runs', runsRouter);
 
 // Chat Status Endpoint (For the dashboard status bar)
 app.get('/api/chat/status', requireAuth, async (req, res) => {
@@ -327,6 +331,23 @@ app.get('/approve-deployment', async (req, res) => {
 });
 
 app.get('/health', (req, res) => res.send({ status: 'online', time: new Date() }));
+
+/**
+ * Queue depth, including the dead-letter queue that previously accumulated failed
+ * tasks that nothing ever read. Counts only — the payloads belong to individual
+ * users and are served through /api/runs instead.
+ */
+app.get('/api/system/queue', requireAuth, async (req, res) => {
+    try {
+        const [pending, failed] = await Promise.all([
+            queue.client.llen('ulla_britta_events'),
+            queue.client.llen('ulla_britta_failed')
+        ]);
+        res.json({ pending, failed, redis: 'connected' });
+    } catch (err) {
+        res.status(503).json({ error: `Queue unreachable: ${err.message}`, redis: 'disconnected' });
+    }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Ingestion Tier online. Monitoring at /health`));

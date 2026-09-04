@@ -62,7 +62,12 @@ export class AgentService {
      * @param {string}   [opts.runId]
      * @param {object}   [opts.budget]   Budget overrides.
      */
-    async processMessage(userId, message, { onEvent = async () => {}, runId = null, budget: budgetOpts = {} } = {}) {
+    async processMessage(userId, message, {
+        onEvent = async () => {},
+        runId = null,
+        budget: budgetOpts = {},
+        alreadyApplied = null
+    } = {}) {
         const turn = this.confirmations.beginTurn(userId);
         const runLogger = logger.forRun ? logger.forRun(userId, null, 'agent') : logger;
 
@@ -95,7 +100,10 @@ export class AgentService {
                 context: {
                     userId,
                     logger: runLogger,
-                    confirmations: this.confirmations.forUser(userId)
+                    confirmations: this.confirmations.forUser(userId),
+                    // Side effects a previous attempt of this run already applied,
+                    // so a retry does not repeat them.
+                    alreadyApplied
                 },
                 onEvent: async (event) => {
                     await this.logEvent(runLogger, event);
