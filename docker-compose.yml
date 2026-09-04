@@ -1,38 +1,56 @@
+# Local stack: queue, webhook receiver, worker.
+#
+# Environment comes from .env — the values were previously duplicated per service,
+# so a new variable had to be added in three places and was routinely missed
+# (SUPABASE_URL and SUPABASE_SERVICE_KEY were absent from both services, which
+# silently disabled all persistence).
+
 services:
-  # 1. Redis (The Queue)
   redis:
     image: redis:alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
-  # 2. Webhook Receiver (The Ingestion Tier)
+  # Ingestion tier: webhooks and the run API.
   receiver:
     build: .
     command: node src/index.mjs
     ports:
       - "3000:3000"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379
       - PORT=3000
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - GITHUB_APP_ID=${GITHUB_APP_ID}
-      - GITHUB_PRIVATE_KEY=${GITHUB_PRIVATE_KEY}
-      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
 
-  # 3. Worker (The Processing Tier)
+  # Processing tier: agent runs, webhook events, the Vercel sentinel.
   worker:
     build: .
     command: node src/worker.mjs
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - GITHUB_APP_ID=${GITHUB_APP_ID}
-      - GITHUB_PRIVATE_KEY=${GITHUB_PRIVATE_KEY}
-      - RESEND_API_KEY=${RESEND_API_KEY}
-      - EMAIL_RECIPIENT=${EMAIL_RECIPIENT}
+
+  # Scheduled sweep. Not started by default: run it on demand with
+  #   docker compose run --rm maintenance
+  # or point a platform cron job at `npm run maintenance`.
+  maintenance:
+    build: .
+    command: node src/maintenance.mjs
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+    profiles: ["tools"]
