@@ -10,6 +10,9 @@ import vercelService from './services/vercel.service.mjs';
 import repoAnalyzer from './services/repo-analyzer.service.mjs';
 import codeGenerator from './services/code-generator.service.mjs';
 import advancedWorkflowsService from './services/advanced-workflows.service.mjs';
+import { reviewPullRequest } from './services/pr.service.mjs';
+import { checkDependencies, formatDependencyReport } from './services/dependencies.service.mjs';
+import { checkRepoHealth, formatHealthReport } from './services/health.service.mjs';
 import { executeRun } from './runs/service.mjs';
 import path from 'path';
 
@@ -258,35 +261,61 @@ Since this repository is a fork of **${upstreamFullName}**, where would you like
             }
         }
         
-        else if (type === 'review_pull_request') {
-            await logger.info(`🔍 Reviewing PR #${payload.pull_request.number}...`);
-            await advancedWorkflowsService.reviewPullRequest(repository, payload.pull_request.number);
-            await logger.success(`PR #${payload.pull_request.number} reviewed.`);
-        }
-        else if (type === 'generate_changelog') {
-            await logger.info(`📝 Generating changelog for release...`);
-            const log = await advancedWorkflowsService.generateChangelog(repository);
-            await logger.success(`Changelog generated.`);
-        }
-        else if (type === 'update_dependencies') {
-            await logger.info(`📦 Checking dependencies for ${repository}...`);
-            await advancedWorkflowsService.checkDependencies(repository);
-            await logger.success(`Dependency check complete.`);
-        }
-        else if (type === 'check_repo_health') {
-            await logger.info(`🏥 Running health check for ${repository}...`);
-            await advancedWorkflowsService.checkRepoHealth(repository);
-            await logger.success(`Health check complete.`);
-        }
-        else if (type === 'clean_stale_issues') {
-            await logger.info(`🧹 Sweeping stale issues for ${repository}...`);
-            await advancedWorkflowsService.cleanStaleIssues(repository);
-            await logger.success(`Stale issues swept.`);
-        }
-        else if (type === 'resolve_merge_conflicts') {
-            await logger.info(`⚔️ Analyzing PR #${payload.prNumber} for merge conflicts...`);
-            await advancedWorkflowsService.resolveMergeConflicts(repository, payload.prNumber);
-            await logger.success(`Conflict analysis complete.`);
+        // The maintenance branches below share one scoped client, resolved from the
+        // installation that owns the event rather than from the repository name.
+        else if (['review_pull_request', 'generate_changelog', 'update_dependencies',
+                  'check_repo_health', 'clean_stale_issues'].includes(type)) {
+            const [wfOwner, wfRepo] = repository.split('/');
+            const client = await githubService.getClient(installationId);
+
+            if (type === 'review_pull_request') {
+                const prNumber = payload.pull_request.number;
+                await logger.info(`Reviewing PR #${prNumber}...`);
+                const result = await reviewPullRequest(client, wfOwner, wfRepo, prNumber);
+                if (result.posted) {
+                    await logger.success(`Reviewed PR #${prNumber}: ${result.inlineComments} inline comment(s).`);
+                } else {
+                    await logger.warn(`PR #${prNumber} was not reviewed: ${result.reason}`);
+                }
+                return result;
+            }
+
+            if (type === 'generate_changelog') {
+                await logger.info('Generating changelog...');
+                const result = await advancedWorkflowsService.generateChangelog(client, wfOwner, wfRepo);
+                await sendEmail(result.changelog, `Changelog: ${repository}`, userId);
+                await logger.success(`Changelog generated from ${result.commits} commits.`);
+                return result;
+            }
+
+            if (type === 'update_dependencies') {
+                await logger.info(`Checking dependencies for ${repository}...`);
+                const manifest = await githubService.getFileContent(client, wfOwner, wfRepo, 'package.json');
+                if (!manifest) {
+                    await logger.info(`${repository} has no package.json; nothing to check.`);
+                    return null;
+                }
+                const result = await checkDependencies(manifest);
+                const report = formatDependencyReport(repository, result);
+                await sendEmail(report, `Dependencies: ${repository}`, userId);
+                await logger.success(`${result.outdated?.length ?? 0} outdated package(s) found.`);
+                return result;
+            }
+
+            if (type === 'check_repo_health') {
+                await logger.info(`Measuring health for ${repository}...`);
+                const health = await checkRepoHealth(client, wfOwner, wfRepo);
+                await sendEmail(formatHealthReport(health), `Health: ${repository}`, userId);
+                await logger.success(`Health check complete: ${health.findings.length} finding(s).`);
+                return health;
+            }
+
+            if (type === 'clean_stale_issues') {
+                await logger.info(`Checking ${repository} for stale issues...`);
+                const result = await advancedWorkflowsService.flagStaleIssues(client, wfOwner, wfRepo);
+                await logger.success(`Flagged ${result.flagged} of ${result.stale} stale issue(s).`);
+                return result;
+            }
         }
     } catch (error) {
         await logger.error(`❌ Agent Error: ${error.message}`);

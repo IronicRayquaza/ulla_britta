@@ -5,6 +5,9 @@ import githubService from '../services/github.service.mjs';
 import advancedWorkflowsService from '../services/advanced-workflows.service.mjs';
 import repoCreatorService from '../services/repo-creator.service.mjs';
 import { sendEmail } from '../services/email.service.mjs';
+import * as prService from '../services/pr.service.mjs';
+import { checkDependencies, formatDependencyReport } from '../services/dependencies.service.mjs';
+import { checkRepoHealth, formatHealthReport } from '../services/health.service.mjs';
 
 /**
  * The agent's capabilities.
@@ -127,9 +130,8 @@ export function buildRegistry() {
     });
 
     registry.register({
-        name: 'review_pull_request',
-        sideEffecting: true,
-        description: 'Reads the real diff of a pull request and posts a review on GitHub.',
+        name: 'get_pull_request',
+        description: 'Reads a pull request in full: metadata, changed files, whether it merges cleanly, and which checks are failing. Use this before reviewing or fixing one.',
         parameters: {
             type: 'object',
             properties: {
@@ -139,9 +141,111 @@ export function buildRegistry() {
             required: ['repoName', 'prNumber']
         },
         handler: async ({ repoName, prNumber }, { userId }) => {
-            await clientForRepo(userId, repoName); // access check before acting
-            const outcome = await advancedWorkflowsService.reviewPullRequest(repoName, prNumber);
-            return ok({ repository: repoName, prNumber, outcome });
+            const { client, owner, repo } = await clientForRepo(userId, repoName);
+            const pr = await prService.getPullRequest(client, owner, repo, prNumber);
+            const { _rawFiles, ...safe } = pr;   // raw patches are too large to return
+            return ok(safe);
+        }
+    });
+
+    registry.register({
+        name: 'review_pull_request',
+        sideEffecting: true,
+        description: 'Reviews a pull request against its real diff and posts a GitHub review with inline comments anchored to specific lines.',
+        parameters: {
+            type: 'object',
+            properties: {
+                repoName: str('Full repository name, e.g. owner/repo'),
+                prNumber: { type: 'number', description: 'Pull request number' }
+            },
+            required: ['repoName', 'prNumber']
+        },
+        handler: async ({ repoName, prNumber }, { userId, logger }) => {
+            const { client, owner, repo } = await clientForRepo(userId, repoName);
+            const result = await prService.reviewPullRequest(client, owner, repo, prNumber);
+            await logger?.info(
+                result.posted
+                    ? `Reviewed ${repoName}#${prNumber} with ${result.inlineComments} inline comment(s)`
+                    : `Did not review ${repoName}#${prNumber}: ${result.reason}`
+            );
+            return ok({ repository: repoName, prNumber, ...result });
+        }
+    });
+
+    registry.register({
+        name: 'get_check_failures',
+        description: 'Reads the failing CI checks for a commit or branch, with their annotations, so you can see why a build actually broke.',
+        parameters: {
+            type: 'object',
+            properties: {
+                repoName: str('Full repository name, e.g. owner/repo'),
+                ref: str('Commit SHA, branch name, or tag')
+            },
+            required: ['repoName', 'ref']
+        },
+        handler: async ({ repoName, ref }, { userId }) => {
+            const { client, owner, repo } = await clientForRepo(userId, repoName);
+            return ok(await prService.getCheckFailures(client, owner, repo, ref));
+        }
+    });
+
+    registry.register({
+        name: 'fix_pull_request',
+        sideEffecting: true,
+        description: 'Reads a pull request, its failing checks and its real file contents, then pushes a fix to the PR branch and comments explaining what changed. Only touches files the PR already changed, and refuses rather than guessing when it cannot determine a correct fix.',
+        parameters: {
+            type: 'object',
+            properties: {
+                repoName: str('Full repository name, e.g. owner/repo'),
+                prNumber: { type: 'number', description: 'Pull request number' },
+                instruction: str('Optional: what specifically to fix')
+            },
+            required: ['repoName', 'prNumber']
+        },
+        handler: async ({ repoName, prNumber, instruction }, { userId, logger }) => {
+            const { client, owner, repo } = await clientForRepo(userId, repoName);
+            const result = await prService.proposePullRequestFix(client, owner, repo, prNumber, instruction);
+            await logger?.info(
+                result.applied
+                    ? `Pushed a fix to ${repoName}#${prNumber}: ${result.filesChanged.join(', ')}`
+                    : `No fix pushed to ${repoName}#${prNumber}: ${result.reason}`
+            );
+            return ok({ repository: repoName, prNumber, ...result });
+        }
+    });
+
+    registry.register({
+        name: 'check_dependencies',
+        description: 'Compares the package.json of a repository against the live npm registry and the OSV advisory database. Reports real version drift and real advisories, not recollection.',
+        parameters: {
+            type: 'object',
+            properties: { repoName: str('Full repository name, e.g. owner/repo') },
+            required: ['repoName']
+        },
+        handler: async ({ repoName }, { userId }) => {
+            const { client, owner, repo } = await clientForRepo(userId, repoName);
+            const content = await githubService.getFileContent(client, owner, repo, 'package.json');
+            if (!content) {
+                return fail('NOT_FOUND', `${repoName} has no package.json at its root.`);
+            }
+            const result = await checkDependencies(content);
+            if (result.error) return fail('BAD_MANIFEST', result.error);
+            return ok({ repository: repoName, ...result, report: formatDependencyReport(repoName, result) });
+        }
+    });
+
+    registry.register({
+        name: 'check_repo_health',
+        description: 'Measures repository health from real signals: CI pass rate, test setup, backlog age, commit recency. States which signals it could not read rather than scoring them as fine.',
+        parameters: {
+            type: 'object',
+            properties: { repoName: str('Full repository name, e.g. owner/repo') },
+            required: ['repoName']
+        },
+        handler: async ({ repoName }, { userId }) => {
+            const { client, owner, repo } = await clientForRepo(userId, repoName);
+            const health = await checkRepoHealth(client, owner, repo);
+            return ok({ ...health, report: formatHealthReport(health) });
         }
     });
 
@@ -282,25 +386,29 @@ export function buildRegistry() {
             required: ['repoName']
         },
         handler: async ({ repoName }, { userId }) => {
-            await clientForRepo(userId, repoName);
-            const changelog = await advancedWorkflowsService.generateChangelog(repoName);
-            return ok({ repository: repoName, changelog });
+            const { client, owner, repo } = await clientForRepo(userId, repoName);
+            const result = await advancedWorkflowsService.generateChangelog(client, owner, repo);
+            return ok({ repository: repoName, ...result });
         }
     });
 
     registry.register({
         name: 'flag_stale_issues',
         sideEffecting: true,
-        description: 'Finds issues with no activity for over 30 days and posts a warning comment on each. Reports exactly how many were flagged.',
+        description: 'Finds issues with no activity for over 30 days and posts a warning comment on each. Reports exactly how many were flagged. It warns only, it never closes anything.',
         parameters: {
             type: 'object',
-            properties: { repoName: str('Full repository name, e.g. owner/repo') },
+            properties: {
+                repoName: str('Full repository name, e.g. owner/repo'),
+                dryRun: { type: 'boolean', description: 'List what would be flagged without commenting' }
+            },
             required: ['repoName']
         },
-        handler: async ({ repoName }, { userId }) => {
-            await clientForRepo(userId, repoName);
-            const outcome = await advancedWorkflowsService.cleanStaleIssues(repoName);
-            return ok({ repository: repoName, outcome });
+        handler: async ({ repoName, dryRun }, { userId, logger }) => {
+            const { client, owner, repo } = await clientForRepo(userId, repoName);
+            const result = await advancedWorkflowsService.flagStaleIssues(client, owner, repo, { dryRun });
+            await logger?.info(`Flagged ${result.flagged} stale issue(s) in ${repoName}`);
+            return ok({ repository: repoName, ...result });
         }
     });
 

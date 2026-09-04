@@ -4,14 +4,25 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const REQUIRED = ['GEMINI_API_KEY', 'REDIS_URL'];
-REQUIRED.forEach(v => {
-    if (!process.env[v]) {
-        // Render provides Redis as REDIS_INTERNAL_URL.
-        if (v === 'REDIS_URL' && process.env.REDIS_INTERNAL_URL) return;
-        throw new Error(`Missing ${v}`);
+// At least one model provider is required. Gemini is the default, but a Groq-only
+// deployment is a supported configuration, so demanding GEMINI_API_KEY specifically
+// would refuse to start a setup that works.
+if (!process.env.GEMINI_API_KEY && !process.env.GROQ_API_KEY && !process.env.OPENROUTER_API_KEY) {
+    throw new Error(
+        'No model provider configured. Set at least one of GEMINI_API_KEY, GROQ_API_KEY or OPENROUTER_API_KEY.'
+    );
+}
+
+// Redis has a working localhost default in queue.mjs, so an unset URL is a
+// development convenience rather than a fatal error. In production it almost
+// certainly means the service was not wired up, so say so loudly.
+if (!process.env.REDIS_URL && !process.env.REDIS_INTERNAL_URL) {
+    const message = 'REDIS_URL is not set; falling back to redis://localhost:6379.';
+    if (process.env.NODE_ENV === 'production') {
+        throw new Error(`${message} Refusing to start in production without a queue.`);
     }
-});
+    console.warn(`⚠️ ${message}`);
+}
 
 const QUEUE_NAME = 'ulla_britta_events';
 const FAILED_QUEUE = 'ulla_britta_failed';

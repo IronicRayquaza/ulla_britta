@@ -22,7 +22,9 @@ const suites = [
     'agent-loop.test.mjs',
     'destructive-gate.test.mjs',
     'honest-failure.test.mjs',
-    'runs.test.mjs'
+    'runs.test.mjs',
+    'diff.test.mjs',
+    'pr.test.mjs'
 ];
 
 let failed = 0;
