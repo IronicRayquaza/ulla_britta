@@ -1,6 +1,6 @@
 import { runAgent, EventType } from './loop.mjs';
 import { Budget } from './budget.mjs';
-import { buildRegistry } from './tools.mjs';
+import { buildRegistry } from './tools/index.mjs';
 import { buildSystemPrompt } from './prompt.mjs';
 import { gatherContext } from './context.mjs';
 import { ConfirmationStore } from './registry.mjs';

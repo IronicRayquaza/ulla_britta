@@ -114,7 +114,12 @@ export class ToolRegistry {
             return ok(result);
         } catch (err) {
             if (err instanceof AccessError) {
-                return fail(err.code, err.message, { retryable: false });
+                // The hint is the actionable half — which repositories ARE visible,
+                // where to grant access, that the user has to connect their account.
+                // Dropping it left the model with a bare refusal and nothing to
+                // relay, which is how "it's possible the repository doesn't exist"
+                // became the answer to a permissions problem.
+                return fail(err.code, err.message, { retryable: false, hint: err.hint });
             }
             const status = err?.status;
             if (status === 403 || status === 401) {

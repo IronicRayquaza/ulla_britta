@@ -14,6 +14,8 @@ import vercelSentinel from './services/vercel-sentinel.service.mjs';
 import agentService from './agent/index.mjs';
 import requireAuth from './middleware/auth.mjs';
 import runsRouter from './routes/runs.mjs';
+import * as githubOAuth from './services/github-oauth.service.mjs';
+import { capabilityMap } from './agent/tools/index.mjs';
 
 dotenv.config();
 
@@ -138,6 +140,104 @@ app.post('/github/link-installation', requireAuth, async (req, res) => {
         console.error('❌ GitHub link-installation failed:', err.message);
         res.status(500).json({ error: err.message });
     }
+});
+
+// ── Acting as the user ─────────────────────────────────────────────────────
+// An installation token cannot create a repository on a personal account, star,
+// follow, read notifications or create a gist — GitHub refuses those to anything
+// that is not the person. This is the identifying OAuth flow that gets a user
+// token, and it is entirely optional: without it those tools fail with a clear
+// explanation rather than a 403.
+
+/** Where the dashboard sends the user to authorize. */
+app.get('/github/oauth/url', requireAuth, async (req, res) => {
+    if (!githubOAuth.isConfigured()) {
+        return res.status(503).json({
+            error: 'GitHub user authorization is not configured on this server.',
+            hint: 'Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.'
+        });
+    }
+
+    // The state is signed with the webhook secret so the callback can trust the
+    // user it names. A raw user id here would let anyone bind a token to any account.
+    const nonce = crypto.randomBytes(8).toString('hex');
+    const payload = `${req.auth.userId}.${Date.now()}.${nonce}`;
+    const signature = crypto
+        .createHmac('sha256', process.env.GITHUB_WEBHOOK_SECRET || '')
+        .update(payload)
+        .digest('hex');
+
+    // Only send an explicit redirect_uri when we know our own public origin.
+    // A relative path is not a valid redirect and GitHub rejects the whole request;
+    // with none, GitHub uses the callback URL configured on the App.
+    const publicUrl = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+
+    res.json({
+        url: githubOAuth.authorizeUrl({
+            state: `${payload}.${signature}`,
+            ...(publicUrl && { redirectUri: `${publicUrl}/github/oauth/callback` })
+        })
+    });
+});
+
+/** Where GitHub sends them back. */
+app.get('/github/oauth/callback', async (req, res) => {
+    const { code, state } = req.query;
+    const frontend = (process.env.FRONTEND_URL || '').split(',')[0].trim() || '/';
+
+    try {
+        if (!code || !state) throw new Error('GitHub did not return a code.');
+
+        const [userId, issuedAt, nonce, signature] = String(state).split('.');
+        const expected = crypto
+            .createHmac('sha256', process.env.GITHUB_WEBHOOK_SECRET || '')
+            .update(`${userId}.${issuedAt}.${nonce}`)
+            .digest('hex');
+
+        const a = Buffer.from(signature || '');
+        const b = Buffer.from(expected);
+        if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+            throw new Error('That authorization request did not come from here.');
+        }
+        if (Date.now() - Number(issuedAt) > 15 * 60 * 1000) {
+            throw new Error('That authorization link has expired. Start again.');
+        }
+
+        const { login } = await githubOAuth.exchangeCode(userId, code);
+        await logger.info(`✅ GitHub user authorized: @${login} → user ${userId}`);
+        res.redirect(`${frontend}/settings?github_user=${encodeURIComponent(login)}`);
+    } catch (err) {
+        console.error('❌ GitHub OAuth callback failed:', err.message);
+        res.redirect(`${frontend}/settings?github_error=${encodeURIComponent(err.message)}`);
+    }
+});
+
+/** Whether the agent can currently act as this user. */
+app.get('/github/oauth/status', requireAuth, async (req, res) => {
+    const token = await githubOAuth.getValidToken(req.auth.userId);
+    res.json({
+        configured: githubOAuth.isConfigured(),
+        connected: Boolean(token),
+        login: token?.login || null
+    });
+});
+
+app.post('/github/oauth/disconnect', requireAuth, async (req, res) => {
+    await githubOAuth.disconnect(req.auth.userId);
+    res.json({ success: true });
+});
+
+/**
+ * The agent's capability map, grouped by GitHub domain.
+ * The dashboard renders this so "what can it do" is answered from the registry
+ * rather than from a list someone maintains by hand.
+ */
+app.get('/api/capabilities', requireAuth, (_req, res) => {
+    const domains = capabilityMap();
+    res.json({
+        total: domains.reduce((n, d) => n + d.count, 0),
+        domains
+    });
 });
 
 

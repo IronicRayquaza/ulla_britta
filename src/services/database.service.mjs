@@ -6,6 +6,16 @@ dotenv.config();
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
+/** One shape for an installation row, whichever query produced it. */
+function shapeInstallation(row) {
+    return {
+        installationId: row.installation_id,
+        login: row.account_login,
+        type: row.account_type || 'User',
+        repositorySelection: row.repositories_access || 'unknown'
+    };
+}
+
 class DatabaseService {
     constructor() {
         if (SUPABASE_URL && SUPABASE_KEY) {
@@ -265,6 +275,100 @@ class DatabaseService {
 
         console.warn(`❌ DB: No installation for user ${userId}${login ? ` covering "${login}"` : ''}.`);
         return null;
+    }
+
+    /**
+     * The installation row for this user, with the account it belongs to.
+     *
+     * getInstallationIdByRepo() returns only an id, so every caller that needed to
+     * know WHICH GitHub account it was acting on reached for
+     * `client.rest.apps.getAuthenticatedInstallation()` — a method that does not
+     * exist in Octokit, and the reason repository creation failed outright. The
+     * account is already recorded at install time; read it from here.
+     *
+     * @param {string} userId
+     * @param {string} [repoFullName] Prefer the installation covering this repo.
+     * @returns {Promise<null|{installationId:number, login:string, type:string, repositorySelection:string}>}
+     */
+    async getInstallationForUser(userId, repoFullName = '') {
+        if (!this.client || !userId) return null;
+
+        const login = (repoFullName || '').split('/')[0];
+        const base = () => this.client
+            .from('github_installations')
+            .select('installation_id, account_login, account_type, repositories_access')
+            .eq('user_id', userId);
+
+        if (login) {
+            const { data } = await base().ilike('account_login', login).maybeSingle();
+            return data?.installation_id ? shapeInstallation(data) : null;
+            // A named owner that does not match is never widened to another account.
+        }
+
+        const { data } = await base()
+            .order('installed_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        return data?.installation_id ? shapeInstallation(data) : null;
+    }
+
+    /** Every installation this user owns, newest first. */
+    async listInstallationsForUser(userId) {
+        if (!this.client || !userId) return [];
+        const { data } = await this.client
+            .from('github_installations')
+            .select('installation_id, account_login, account_type, repositories_access')
+            .eq('user_id', userId)
+            .order('installed_at', { ascending: false });
+        return (data || []).map(shapeInstallation);
+    }
+
+    /**
+     * Stores a GitHub user-to-server token.
+     *
+     * An installation token cannot act AS the user. Creating a repository on a
+     * personal account, starring, following and reading notifications all require
+     * a user token, so those actions failed with an opaque 403 or were absent
+     * altogether.
+     */
+    async storeGithubUserToken(userId, token) {
+        if (!this.client || !userId) return;
+        const { error } = await this.client.from('github_user_tokens').upsert({
+            user_id: userId,
+            access_token: token.accessToken,
+            refresh_token: token.refreshToken || null,
+            expires_at: token.expiresAt || null,
+            refresh_token_expires_at: token.refreshTokenExpiresAt || null,
+            github_login: token.login || null,
+            scope: token.scope || null,
+            updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id' });
+
+        if (error) throw new Error(`Could not save the GitHub user token: ${error.message}`);
+    }
+
+    async getGithubUserToken(userId) {
+        if (!this.client || !userId) return null;
+        const { data, error } = await this.client
+            .from('github_user_tokens')
+            .select('access_token, refresh_token, expires_at, refresh_token_expires_at, github_login, scope')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+        if (error || !data) return null;
+        return {
+            accessToken: data.access_token,
+            refreshToken: data.refresh_token,
+            expiresAt: data.expires_at,
+            refreshTokenExpiresAt: data.refresh_token_expires_at,
+            login: data.github_login,
+            scope: data.scope
+        };
+    }
+
+    async deleteGithubUserToken(userId) {
+        if (!this.client || !userId) return;
+        await this.client.from('github_user_tokens').delete().eq('user_id', userId);
     }
 
     /**

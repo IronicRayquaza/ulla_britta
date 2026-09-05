@@ -8,7 +8,9 @@
     "test": "node test/safety/run.mjs",
     "worker": "node src/worker.mjs",
     "web": "node src/index.mjs",
-    "maintenance": "node src/maintenance.mjs"
+    "maintenance": "node src/maintenance.mjs",
+    "docs:capabilities": "node scripts/generate-capability-docs.mjs",
+    "docs:capabilities:check": "node scripts/generate-capability-docs.mjs --check"
   },
   "keywords": [],
   "author": "",

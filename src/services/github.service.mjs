@@ -74,38 +74,129 @@ class GitHubService {
   }
 
   /**
-   * CREATE: Targeted Organization/User Repo Creation.
+   * Creates a repository, in an organization or on a personal account.
+   *
+   * Two things were wrong here. The "already exists" branch called
+   * `client.rest.apps.getAuthenticatedInstallation()`, which Octokit does not
+   * define — so the recovery path threw "is not a function" and the user saw a
+   * tool bug instead of their repository. And a personal-account creation was
+   * attempted with an installation token, which GitHub refuses: POST /user/repos
+   * is user-to-server only. The owner is now passed in by the caller, and the
+   * personal-account path takes a client authenticated as the user.
+   *
+   * @param {object}  client   Installation client for an org, user client otherwise.
+   * @param {object}  options
+   * @param {string}  options.name
+   * @param {string}  [options.owner]    Account the repository will belong to.
+   * @param {boolean} [options.isOrg]    Create inside an organization.
    */
-  async createRepository(client, name, description = '', orgName = null, isPrivate = false) {
+  async createRepository(client, {
+    name,
+    owner = null,
+    description = '',
+    isOrg = false,
+    isPrivate = false,
+    autoInit = true,
+    gitignoreTemplate = null,
+    licenseTemplate = null,
+    homepage = null
+  }) {
+    const shared = {
+      name,
+      description: description || undefined,
+      private: isPrivate,
+      auto_init: autoInit,
+      ...(gitignoreTemplate && { gitignore_template: gitignoreTemplate }),
+      ...(licenseTemplate && { license_template: licenseTemplate }),
+      ...(homepage && { homepage })
+    };
+
     try {
-      if (orgName) {
-          console.log(`🏗️ Creating repo "${name}" in Org "${orgName}"...`);
-          const { data } = await client.rest.repos.createInOrg({
-            org: orgName,
-            name,
-            description,
-            private: isPrivate,
-            auto_init: true
-          });
-          return data;
-      } else {
-          console.log(`🏗️ Creating repo "${name}" in Personal Account...`);
-          const { data } = await client.rest.repos.createForAuthenticatedUser({
-            name,
-            description,
-            private: isPrivate,
-            auto_init: true
-          });
-          return data;
+      if (isOrg) {
+        if (!owner) throw new Error('An organization name is required to create a repository in an org.');
+        console.log(`🏗️ Creating repo "${name}" in org "${owner}"...`);
+        const { data } = await client.rest.repos.createInOrg({ org: owner, ...shared });
+        return data;
       }
+
+      console.log(`🏗️ Creating repo "${name}" on personal account "${owner || 'authenticated user'}"...`);
+      const { data } = await client.rest.repos.createForAuthenticatedUser(shared);
+      return data;
     } catch (e) {
-      if (e.message.includes('already exists')) {
-          const { data } = await client.rest.apps.getAuthenticatedInstallation();
-          const { data: repo } = await client.rest.repos.get({ owner: data.account.login, repo: name });
-          return repo;
+      // Already there: return the existing repository rather than failing, but only
+      // when we can name the owner — never by asking GitHub who we are.
+      const alreadyExists = /already exists/i.test(e.message || '');
+      if (alreadyExists && owner) {
+        const { data: repo } = await client.rest.repos.get({ owner, repo: name });
+        return repo;
       }
       throw e;
     }
+  }
+
+  /**
+   * Commits several files at once by building a tree.
+   *
+   * pushFile() commits one file per call, which means a five-file change lands as
+   * five commits and can be observed half-applied. This writes them as a single
+   * commit on top of the branch head.
+   *
+   * @param {Array<{path:string, content:string}>} files
+   */
+  async pushFiles(client, owner, repo, files, message, branch = null) {
+    if (!files?.length) throw new Error('No files to commit.');
+
+    const targetBranch = branch || (await client.rest.repos.get({ owner, repo })).data.default_branch;
+    const { data: ref } = await client.rest.git.getRef({ owner, repo, ref: `heads/${targetBranch}` });
+    const { data: baseCommit } = await client.rest.git.getCommit({
+      owner, repo, commit_sha: ref.object.sha
+    });
+
+    const tree = await Promise.all(files.map(async (f) => {
+      const { data: blob } = await client.rest.git.createBlob({
+        owner, repo,
+        content: Buffer.from(f.content).toString('base64'),
+        encoding: 'base64'
+      });
+      return { path: f.path, mode: '100644', type: 'blob', sha: blob.sha };
+    }));
+
+    const { data: newTree } = await client.rest.git.createTree({
+      owner, repo, base_tree: baseCommit.tree.sha, tree
+    });
+
+    const { data: commit } = await client.rest.git.createCommit({
+      owner, repo, message, tree: newTree.sha, parents: [ref.object.sha]
+    });
+
+    await client.rest.git.updateRef({
+      owner, repo, ref: `heads/${targetBranch}`, sha: commit.sha
+    });
+
+    return { sha: commit.sha, branch: targetBranch, files: files.map(f => f.path) };
+  }
+
+  async deleteFile(client, owner, repo, path, message, branch = null) {
+    const { data } = await client.rest.repos.getContent({
+      owner, repo, path, ...(branch && { ref: branch })
+    });
+    if (Array.isArray(data)) throw new Error(`"${path}" is a directory, not a file.`);
+
+    await client.rest.repos.deleteFile({
+      owner, repo, path, message, sha: data.sha, ...(branch && { branch })
+    });
+    return { path, deleted: true };
+  }
+
+  /** Directory listing, so the agent can explore a repository it has not seen. */
+  async listDirectory(client, owner, repo, path = '', ref = null) {
+    const { data } = await client.rest.repos.getContent({
+      owner, repo, path, ...(ref && { ref })
+    });
+    if (!Array.isArray(data)) {
+      return [{ name: data.name, path: data.path, type: 'file', size: data.size }];
+    }
+    return data.map(e => ({ name: e.name, path: e.path, type: e.type, size: e.size }));
   }
 
   async forkRepository(client, owner, repo) {
@@ -124,10 +215,17 @@ class GitHubService {
        const { data } = await client.rest.apps.listReposAccessibleToInstallation({
            per_page: 100
        });
-       
+
        const repos = data.repositories || [];
        return repos.map(repo => ({
            full_name: repo.full_name,
+           private: repo.private,
+           fork: repo.fork,
+           archived: repo.archived,
+           default_branch: repo.default_branch,
+           language: repo.language,
+           stars: repo.stargazers_count,
+           open_issues: repo.open_issues_count,
            updated_at: repo.updated_at,
            pushed_at: repo.pushed_at,
            description: repo.description

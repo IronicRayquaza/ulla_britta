@@ -19,15 +19,49 @@ export class GeminiProvider {
         return this.client !== null;
     }
 
+    /**
+     * Gemini's function schema is a subset of JSON Schema, and it rejects an
+     * OBJECT with no properties outright:
+     *   "parameters.properties: should be non-empty for OBJECT type"
+     * A tool that takes no arguments is perfectly ordinary, so the whole request
+     * would fail because of one such tool. Empty objects are dropped instead.
+     */
+    static sanitizeSchema(schema) {
+        if (!schema || typeof schema !== 'object') return schema;
+
+        if (schema.type === 'array') {
+            const items = GeminiProvider.sanitizeSchema(schema.items);
+            return items ? { ...schema, items } : null;
+        }
+
+        if (schema.type !== 'object') return schema;
+
+        const properties = {};
+        for (const [key, value] of Object.entries(schema.properties || {})) {
+            const cleaned = GeminiProvider.sanitizeSchema(value);
+            if (cleaned) properties[key] = cleaned;
+        }
+
+        if (Object.keys(properties).length === 0) return null;
+
+        // A required key whose property was dropped would be unsatisfiable.
+        const required = (schema.required || []).filter(k => properties[k]);
+        return { ...schema, properties, ...(required.length ? { required } : {}) };
+    }
+
     /** Normalized tools → Gemini functionDeclarations. */
     static toolsFor(tools) {
         if (!tools || tools.length === 0) return undefined;
         return [{
-            functionDeclarations: tools.map(t => ({
-                name: t.name,
-                description: t.description,
-                parameters: t.parameters || { type: 'object', properties: {} }
-            }))
+            functionDeclarations: tools.map(t => {
+                const parameters = GeminiProvider.sanitizeSchema(t.parameters);
+                return {
+                    name: t.name,
+                    description: t.description,
+                    // Omitted entirely for a tool that takes no arguments.
+                    ...(parameters && { parameters })
+                };
+            })
         }];
     }
 

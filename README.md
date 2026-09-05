@@ -38,6 +38,23 @@ permission failure are different things to the model.
 Gemini and hits a rate limit continues on Groq **with its full history**, rather
 than restarting with amnesia.
 
+### What it can reach
+
+`src/agent/tools/` is the capability surface, one module per GitHub domain:
+repositories, files, git history, issues, pull requests, Actions, releases, people
+and insight. **[docs/AGENT_CAPABILITIES.md](docs/AGENT_CAPABILITIES.md) is the map**
+— its inventory is generated from the registry, so it cannot drift from the code.
+
+```bash
+npm run docs:capabilities        # regenerate it after adding a tool
+```
+
+Two credentials reach GitHub, and they are not interchangeable. The **installation
+token** does repository work. A **user token** is needed for the handful of
+endpoints GitHub refuses to anything that is not the person — creating a repository
+on a personal account, starring, following, notifications, gists. The second is
+optional; without it those tools fail with an instruction instead of a 403.
+
 Two rules the code enforces rather than the prompt:
 
 - **Irreversible actions need confirmation.** `delete_repository` is refused on
@@ -52,7 +69,7 @@ Two rules the code enforces rather than the prompt:
 ```bash
 cp .env.example .env     # then fill it in
 npm install
-npm test                 # 167 checks, no network needed
+npm test                 # 246 checks, no network needed
 npm start
 ```
 
@@ -66,13 +83,26 @@ Apply the migrations before first use:
 ```bash
 psql "$DATABASE_URL" -f migrations/001_agent_runs.sql
 psql "$DATABASE_URL" -f migrations/002_tenancy.sql
+psql "$DATABASE_URL" -f migrations/003_client_writes.sql
+psql "$DATABASE_URL" -f migrations/004_upsert_keys.sql
+psql "$DATABASE_URL" -f migrations/005_github_user_tokens.sql
 ```
 
 Or paste them into the Supabase SQL editor. Without `001` the agent still runs and
 streams, but nothing is saved — it warns once and carries on. `002` adds
 `profiles.github_username` (which webhook attribution depends on) and enables row
 level security; **without it, any signed-in user can read every other user's data**
-through the anon key.
+through the anon key. `005` holds GitHub user tokens and is only needed if you
+configure `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`.
+
+### Acting as the user (optional)
+
+GitHub refuses `POST /user/repos`, starring, following, notifications and gists to
+an installation token. To let the agent do them, set `GITHUB_CLIENT_ID` and
+`GITHUB_CLIENT_SECRET` from the same GitHub App, enable **Request user
+authorization (OAuth) during installation** on it, and apply migration `005`. The
+user then connects once from dashboard Settings. Leave it unset and the rest of the
+agent is unaffected.
 
 ### Scheduled maintenance
 
@@ -116,5 +146,8 @@ regress:
 | `diff` | Review comments only anchor to lines that exist in the diff |
 | `pr` | Fixes only touch files the PR changed, on the PR branch |
 | `tenancy` | A user cannot reach another tenant's installation; raw-byte signatures |
+| `narration` | Runs are legible: what it is doing, and the evidence it did it |
+| `capabilities` | Every Octokit method called exists; the registry and the docs agree |
+| `tool-smoke` | Every read-only tool answers for real against a stand-in GitHub |
 
 They run offline in about two seconds.
