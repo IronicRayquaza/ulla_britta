@@ -38,6 +38,67 @@ const history = [
     check('tools become functionDeclarations', tools[0].functionDeclarations[0].name === 't');
 }
 
+// ── Gemini 3 thought signatures survive the round trip ──────────────────────
+// Gemini attaches a signature beside every function call and refuses the NEXT
+// turn with a 400 if the history comes back without it. response.functionCalls()
+// returns only { name, args }, so reading tool calls through that helper dropped
+// the signature and killed any run that made a tool call on a Gemini 3 model.
+{
+    const raw = {
+        candidates: [{
+            content: {
+                parts: [
+                    { text: 'Let me look that up.' },
+                    {
+                        functionCall: { name: 'get_user_profile', args: { username: 'octocat' } },
+                        thoughtSignature: 'SIGNATURE_ABC'
+                    }
+                ]
+            }
+        }],
+        functionCalls: () => [{ name: 'get_user_profile', args: { username: 'octocat' } }]
+    };
+
+    const calls = GeminiProvider.callsFrom(raw);
+    check('the tool call is read from the raw parts', calls.length === 1 && calls[0].name === 'get_user_profile', calls);
+    check('the thought signature is kept', calls[0].meta?.thoughtSignature === 'SIGNATURE_ABC', calls[0]);
+    check('arguments still survive', calls[0].args.username === 'octocat');
+    check('every call still gets an id', typeof calls[0].id === 'string' && calls[0].id.length > 0);
+
+    // And it must go back out attached to the call, as a sibling of functionCall.
+    const { contents } = GeminiProvider.contentsFor([
+        user('who is octocat?'),
+        assistant('Let me look.', calls),
+        toolResult(calls[0].id, 'get_user_profile', { ok: true, data: { followers: 1 } })
+    ]);
+    const modelTurn = contents.find(c => c.role === 'model');
+    const callPart = modelTurn.parts.find(p => p.functionCall);
+    check('the signature is sent back beside the call',
+        callPart.thoughtSignature === 'SIGNATURE_ABC', callPart);
+    check('and not smuggled inside the functionCall',
+        callPart.functionCall.thoughtSignature === undefined, callPart.functionCall);
+
+    // A call with no signature must not invent one.
+    const { contents: bare } = GeminiProvider.contentsFor([
+        assistant('', [{ id: 'x', name: 't', args: {} }])
+    ]);
+    check('a call without a signature sends none',
+        !('thoughtSignature' in bare[0].parts[0]), bare[0].parts[0]);
+
+    // A response shape with no readable parts still yields the calls.
+    const fallback = GeminiProvider.callsFrom({
+        functionCalls: () => [{ name: 'only_helper', args: { a: 1 } }]
+    });
+    check('the SDK helper is still a usable fallback',
+        fallback.length === 1 && fallback[0].name === 'only_helper', fallback);
+
+    check('a missing signature is a provider problem, not a bad request',
+        ProviderRouter.classify({
+            status: 400,
+            message: 'Function call is missing a thought_signature in functionCall parts.'
+        }) === Failure.PROVIDER);
+}
+
 // ── OpenAI-compatible (Groq / OpenRouter) ───────────────────────────────────
 {
     const msgs = OpenAICompatibleProvider.messagesFor(history);

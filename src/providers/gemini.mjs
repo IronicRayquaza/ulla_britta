@@ -84,6 +84,31 @@ export class GeminiProvider {
         }];
     }
 
+    /**
+     * Tool calls from a raw response, keeping the thought signature attached.
+     *
+     * Falls back to the SDK helper when the raw parts are not readable, so an
+     * older or mocked response shape still yields the calls — just without the
+     * signature, which only Gemini 3 needs.
+     */
+    static callsFrom(response) {
+        const parts = response?.candidates?.[0]?.content?.parts;
+
+        if (Array.isArray(parts)) {
+            return parts
+                .filter(p => p.functionCall)
+                .map(p => ({
+                    id: randomUUID(),
+                    name: p.functionCall.name,
+                    args: p.functionCall.args || {},
+                    ...(p.thoughtSignature && { meta: { thoughtSignature: p.thoughtSignature } })
+                }));
+        }
+
+        const helper = typeof response?.functionCalls === 'function' ? response.functionCalls() : null;
+        return (helper || []).map(c => ({ id: randomUUID(), name: c.name, args: c.args || {} }));
+    }
+
     /** Normalized messages → Gemini { systemInstruction, contents }. */
     static contentsFor(messages) {
         const systemParts = [];
@@ -104,7 +129,14 @@ export class GeminiProvider {
                 const parts = [];
                 if (m.content) parts.push({ text: m.content });
                 for (const c of m.toolCalls || []) {
-                    parts.push({ functionCall: { name: c.name, args: c.args || {} } });
+                    // The thought signature rides alongside the call, not inside it,
+                    // and Gemini 3 refuses the whole request when a function call in
+                    // the history arrives without the one it issued. Signatures are
+                    // accepted across models, so one produced by 2.5 is still worth
+                    // handing to 3.x after a failover.
+                    const part = { functionCall: { name: c.name, args: c.args || {} } };
+                    if (c.meta?.thoughtSignature) part.thoughtSignature = c.meta.thoughtSignature;
+                    parts.push(part);
                 }
                 // Gemini rejects empty parts; an assistant turn always has something.
                 if (parts.length === 0) parts.push({ text: '' });
@@ -152,7 +184,10 @@ export class GeminiProvider {
         );
         const response = result.response;
 
-        const calls = (typeof response.functionCalls === 'function' ? response.functionCalls() : null) || [];
+        // Read the raw parts rather than response.functionCalls(): that helper
+        // returns only { name, args } and throws away the thought signature sitting
+        // beside each call, which Gemini 3 then demands back on the following turn.
+        const calls = GeminiProvider.callsFrom(response);
         let text = '';
         try {
             text = response.text() || '';
@@ -163,7 +198,7 @@ export class GeminiProvider {
 
         return {
             text,
-            toolCalls: calls.map(c => ({ id: randomUUID(), name: c.name, args: c.args || {} })),
+            toolCalls: calls,
             usage: {
                 inputTokens: response.usageMetadata?.promptTokenCount || 0,
                 outputTokens: response.usageMetadata?.candidatesTokenCount || 0

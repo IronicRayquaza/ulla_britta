@@ -164,6 +164,15 @@ export class ProviderRouter {
             return Failure.PROVIDER;
         }
 
+        // Gemini 3 refuses a history whose function calls carry no thought
+        // signature. The adapter passes signatures through, so this should not
+        // happen — but if a tool call ever originates from a provider that issues
+        // none, the run should move to a model that does not demand one rather
+        // than dying.
+        if (message.includes('thought_signature') || message.includes('thoughtsignature')) {
+            return Failure.PROVIDER;
+        }
+
         if (status >= 400 && status <= 499) return Failure.REQUEST;
 
         // No usable status — fall back to reading the message. Network faults and

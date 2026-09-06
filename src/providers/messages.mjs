@@ -8,8 +8,13 @@
  *
  *   { role: 'system',    content }
  *   { role: 'user',      content }
- *   { role: 'assistant', content, toolCalls: [{ id, name, args }] }
+ *   { role: 'assistant', content, toolCalls: [{ id, name, args, meta? }] }
  *   { role: 'tool',      toolCallId, name, content }
+ *
+ * `meta` is opaque per-provider data that has to survive the round trip. Gemini 3
+ * attaches a thought signature to every function call and rejects the next turn
+ * with a 400 if the history comes back without it — so anything an adapter needs
+ * to hand back verbatim lives here rather than being dropped on normalization.
  */
 
 export const system = (content) => ({ role: 'system', content });
