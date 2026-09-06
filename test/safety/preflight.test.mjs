@@ -23,14 +23,18 @@ function recorder() {
     };
 }
 
-const provider = (name, model, { available = true, models = null, fail = null } = {}) => ({
+const provider = (name, model, { available = true, models = null, fail = null, callFails = null } = {}) => ({
     name, model, available,
     ...(models || fail ? {
         listModels: async () => {
             if (fail) throw new Error(fail);
             return models;
         }
-    } : {})
+    } : {}),
+    complete: async () => {
+        if (callFails) throw Object.assign(new Error(callFails.message), { status: callFails.status });
+        return { text: 'ok', toolCalls: [], usage: {} };
+    }
 });
 
 // ── A model that is gone must be impossible to miss ─────────────────────────
@@ -107,6 +111,49 @@ const provider = (name, model, { available = true, models = null, fail = null } 
     check('and is not in the results', results.length === 0, results);
     check('with nothing configured at all, that itself is the warning',
         log.lines.warn.some(l => /No model provider is configured/i.test(l)), log.lines.warn);
+}
+
+// ── A listed model that refuses to run ──────────────────────────────────────
+// The catalogue lies. Google lists gemini-2.5-flash-lite and answers a real call
+// with "this model is no longer available" — so a catalogue-only check passed it,
+// it shipped, and every run reaching that tier died on a 404. Being listed is not
+// being usable, and only a real call can tell the difference.
+{
+    const log = recorder();
+    const disabled = [];
+    const listedButDead = provider('gemini-lite', 'gemini-2.5-flash-lite', {
+        models: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.5-flash-lite'],
+        callFails: { status: 404, message: 'This model models/gemini-2.5-flash-lite is no longer available' }
+    });
+
+    const results = await checkModels({
+        providers: [listedButDead],
+        disableProvider: (n, r) => disabled.push([n, r])
+    }, { logger: log });
+
+    check('a listed model that will not run is not ok', results[0].ok === false, results[0]);
+    check('the reason distinguishes it from a missing model',
+        results[0].reason === 'call refused', results[0].reason);
+    check('the warning quotes what the provider actually said',
+        log.lines.warn.some(l => l.includes('no longer available')), log.lines.warn);
+    check('and suggests something else from the catalogue',
+        log.lines.warn.some(l => l.includes('gemini-3.5-flash-lite')), log.lines.warn);
+    check('the provider is taken out of the ladder',
+        disabled.some(([n]) => n === 'gemini-lite'), disabled);
+}
+
+{
+    // An outage during boot says nothing about the configuration.
+    const log = recorder();
+    const overloaded = provider('gemini', 'gemini-2.5-flash', {
+        models: ['gemini-2.5-flash'],
+        callFails: { status: 503, message: 'This model is currently experiencing high demand' }
+    });
+
+    const results = await checkModels({ providers: [overloaded] }, { logger: log });
+    check('a 503 at boot is not a misconfiguration', results[0].ok === true, results[0]);
+    check('and the provider is not condemned for it',
+        !log.lines.warn.some(l => l.includes('refuses to run')), log.lines.warn);
 }
 
 // ── A model that exists but cannot carry the request ────────────────────────

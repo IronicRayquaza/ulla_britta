@@ -40,8 +40,15 @@ class GitHubService {
   }
 
   /**
-   * Advanced Search: The Agent's "Eyes".
-   * Implements filters for trending, topic, and language.
+   * Repository search.
+   *
+   * This claimed to "implement filters for trending" and had no notion of recency
+   * at all — it sorted by all-time stars, so it answered "what is trending" with
+   * the same handful of decade-old repositories every time, and the agent rightly
+   * told users it could not do it.
+   *
+   * GitHub has no trending endpoint. The accepted approximation is stars gathered
+   * on something recent, which is what createdAfter/pushedAfter express.
    */
   async searchRepositories(client, criteria) {
       const parts = [];
@@ -49,28 +56,39 @@ class GitHubService {
       if (criteria.keyword) parts.push(criteria.keyword);
       if (criteria.minStars) parts.push(`stars:>${criteria.minStars}`);
       if (criteria.language) parts.push(`language:${criteria.language}`);
+      if (criteria.createdAfter) parts.push(`created:>${criteria.createdAfter}`);
+      if (criteria.pushedAfter) parts.push(`pushed:>${criteria.pushedAfter}`);
       parts.push('archived:false'); // Only active repos
+
+      // The search API rejects a query with no terms, and "everything, sorted by
+      // stars" is a meaningful question — it just needs a floor to stand on.
+      if (parts.length === 1) parts.unshift('stars:>1');
 
       const query = parts.join(' ');
       console.log(`🔍 Agent Searching GitHub: ${query}`);
 
       const { data } = await client.rest.search.repos({
           q: query,
-          sort: 'stars',
+          sort: criteria.sort || 'stars',
           order: 'desc',
           per_page: criteria.limit || 10
       });
 
-      return data.items.map(repo => ({
-          full_name: repo.full_name,
-          description: repo.description,
-          stars: repo.stargazers_count,
-          forks: repo.forks_count,
-          language: repo.language,
-          topics: repo.topics || [],
-          pushed_at: repo.pushed_at,
-          url: repo.html_url
-      }));
+      return {
+          query,
+          total: data.total_count,
+          results: data.items.map(repo => ({
+              full_name: repo.full_name,
+              description: repo.description,
+              stars: repo.stargazers_count,
+              forks: repo.forks_count,
+              language: repo.language,
+              topics: repo.topics || [],
+              created_at: repo.created_at,
+              pushed_at: repo.pushed_at,
+              url: repo.html_url
+          }))
+      };
   }
 
   /**

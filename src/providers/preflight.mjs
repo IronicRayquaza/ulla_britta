@@ -61,6 +61,27 @@ export async function checkModels(router, {
             return { ...base, ok: false, reason: 'not offered', catalogue };
         }
 
+        // Being listed is not the same as working. Google lists
+        // gemini-2.5-flash-lite and then answers a real call with "this model is
+        // no longer available" — so the catalogue check passed, the model shipped,
+        // and every run that reached that tier failed with a 404. The only honest
+        // check is to actually call it.
+        if (typeof provider.complete === 'function') {
+            try {
+                await provider.complete({
+                    messages: [{ role: 'user', content: 'ok' }],
+                    tools: []
+                });
+            } catch (err) {
+                const status = err?.status || err?.response?.status;
+                // Throttling and outages say nothing about the configuration.
+                if (status === 429 || (status >= 500 && status <= 599)) {
+                    return { ...base, ok: true, reason: `could not check: ${err.message}` };
+                }
+                return { ...base, ok: false, reason: 'call refused', detail: err.message, catalogue };
+            }
+        }
+
         // The model exists — but can this key actually send the agent's request?
         // Groq's free tier allows 8,000 tokens per request and the tool schema
         // alone is larger, so every call 413s. The catalogue says nothing about
@@ -81,12 +102,27 @@ export async function checkModels(router, {
     }));
 
     for (const r of results) {
+        // Something proven unusable at boot should not be tried on every step of
+        // every run afterwards.
+        if (!r.ok && typeof router.disableProvider === 'function') {
+            router.disableProvider(r.provider, `${r.provider}: ${r.reason}${r.detail ? ` — ${r.detail}` : ''}`);
+        }
+
         if (r.ok) {
             if (r.reason === 'available') {
                 logger.info?.(`✅ ${r.provider}: ${r.model}`);
             } else {
                 logger.warn?.(`⚠️  ${r.provider}: ${r.model} — ${r.reason}`);
             }
+            continue;
+        }
+
+        if (r.reason === 'call refused') {
+            const alternatives = (r.catalogue || []).filter(usableForTools).slice(0, 8);
+            logger.warn?.(
+                `❌ ${r.provider} lists "${r.model}" but refuses to run it: ${r.detail}\n`
+                + `   Set ${envVarFor(r.provider)} to something else — try: ${alternatives.join(', ')}`
+            );
             continue;
         }
 

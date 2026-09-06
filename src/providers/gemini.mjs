@@ -142,7 +142,14 @@ export class GeminiProvider {
             ...(GeminiProvider.toolsFor(tools) && { tools: GeminiProvider.toolsFor(tools) })
         });
 
-        const result = await generativeModel.generateContent({ contents });
+        // Without a timeout a struggling model can hold a step open for minutes —
+        // a 503 from an overloaded Gemini took 2m15s to surface before the run
+        // could even try the next provider. Failing over sooner is worth more than
+        // waiting out an outage.
+        const result = await generativeModel.generateContent(
+            { contents },
+            { timeout: Number(process.env.PROVIDER_TIMEOUT_MS) || 60_000 }
+        );
         const response = result.response;
 
         const calls = (typeof response.functionCalls === 'function' ? response.functionCalls() : null) || [];

@@ -50,9 +50,14 @@ const narrators = {
     },
 
     search_repositories: {
-        start: (a) => `Searching GitHub for ${a.topic || a.keyword || 'repositories'}`,
-        done: (_a, d) => `Found ${plural(d.count, 'match', 'matches')}`,
-        evidence: (_a, d) => (d.results || []).slice(0, 6).map(r => `${r.full_name} — ${r.stars}★`)
+        start: (a) => a.createdAfter
+            ? `Looking for repositories created since ${a.createdAfter}, most starred first`
+            : `Searching GitHub for ${a.topic || a.keyword || 'repositories'}`,
+        done: (_a, d) => `Found ${plural(d.total ?? d.count, 'match', 'matches')}, showing ${d.count}`,
+        evidence: (_a, d) => [
+            ...(d.results || []).slice(0, 6).map(r => `${r.full_name} — ${r.stars}★${r.language ? ` (${r.language})` : ''}`),
+            d.query ? `query: ${d.query}` : null
+        ].filter(Boolean)
     },
 
     list_pull_requests: {

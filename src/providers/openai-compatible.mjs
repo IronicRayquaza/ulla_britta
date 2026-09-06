@@ -98,7 +98,11 @@ export class OpenAICompatibleProvider {
             payload.tool_choice = 'auto';
         }
 
-        const completion = await this.client.chat.completions.create(payload);
+        // Bounded, so a struggling provider fails over instead of holding the step
+        // open. See the same note in gemini.mjs.
+        const completion = await this.client.chat.completions.create(payload, {
+            timeout: Number(process.env.PROVIDER_TIMEOUT_MS) || 60_000
+        });
         const msg = completion.choices[0].message;
 
         const toolCalls = (msg.tool_calls || []).map(c => {

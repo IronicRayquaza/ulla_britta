@@ -378,7 +378,7 @@ cannot belong to both.
 
 | Tool | Does | Arguments | |
 | --- | --- | --- | --- |
-| `search_repositories` | Searches public GitHub repositories by topic, keyword, language or star count. Use this to find projects, not to find the user's own — list_repositories does that. | `topic`, `keyword`, `language`, `minStars`, `limit` | read-only |
+| `search_repositories` | Searches public GitHub repositories by topic, keyword, language, star count or age. Use this to find projects, not to find the user's own — list_repositories does that. GitHub has no "trending" feed, but this is how you answer that question: pass createdAfter with a recent date and leave the sort on stars, which finds new projects that have gathered the most attention. Say that is what you did rather than calling it an official trending list. | `topic`, `keyword`, `language`, `minStars`, `createdAfter`, `pushedAfter`, `sort`, `limit` | read-only |
 | `check_dependencies` | Compares the package.json of a repository against the live npm registry and the OSV advisory database. Reports real version drift and real advisories, not recollection. | `repoName`* | read-only |
 | `check_repo_health` | Measures repository health from real signals: CI pass rate, test setup, backlog age, commit recency. States which signals it could not read rather than scoring them as fine. | `repoName`* | read-only |
 | `list_security_alerts` | Reads a repository's open security alerts: Dependabot advisories on its dependencies and code-scanning findings. Says plainly when a feature is not enabled rather than reporting zero alerts as though it were clean. | `repoName`*, `kind`, `severity`, `limit` | read-only |

@@ -306,12 +306,54 @@ const history = [
     check('it was called exactly twice', calls === 2, calls);
 }
 
+// ── A provider proven broken is not paid for again ──────────────────────────
+// A wrong model, a rejected key or an over-budget request fails identically on
+// the next step and the next run. Retrying it every time costs a round-trip per
+// step and repeats the same line in the log.
+{
+    let brokenCalls = 0;
+    const broken = {
+        name: 'groq', available: true, model: 'openai/gone',
+        complete: async () => { brokenCalls++; const e = new Error('model_not_found'); e.status = 404; throw e; }
+    };
+    const working = {
+        name: 'openrouter', available: true, model: 'vendor/fine',
+        complete: async () => ({ text: 'ok', toolCalls: [], usage: {} })
+    };
+
+    const router = new ProviderRouter([broken, working]);
+    for (let i = 0; i < 3; i++) {
+        await router.complete({ messages: history, tools: [], retryThrottled: false });
+    }
+
+    check('a broken provider is called once, not once per run', brokenCalls === 1, brokenCalls);
+    check('and is recorded as disabled with a reason',
+        /does not serve/.test(router.disabled.get('groq') || ''), router.disabled.get('groq'));
+    check('the working provider still answers',
+        (await router.complete({ messages: history, tools: [], retryThrottled: false })).text === 'ok');
+
+    // A throttle is not a configuration fault and must not disable anything.
+    const throttled = {
+        name: 'gemini', available: true, model: 'm',
+        complete: async () => { const e = new Error('rate limit'); e.status = 429; throw e; }
+    };
+    const r2 = new ProviderRouter([throttled, working]);
+    await r2.complete({ messages: history, tools: [], retryThrottled: false });
+    check('a throttled provider is not disabled', !r2.disabled.has('gemini'), [...r2.disabled]);
+}
+
 // ── The shipped configuration points at models that exist ───────────────────
 {
     // Both of these were real, shipped defaults that the upstream provider had
     // already removed. The names are pinned so a future edit cannot quietly
     // reintroduce a model that is known to be gone.
-    const dead = ['llama-3.3-70b-versatile', 'meta-llama/llama-3.3-70b-instruct:free'];
+    const dead = [
+        'llama-3.3-70b-versatile',
+        'meta-llama/llama-3.3-70b-instruct:free',
+        // Still in Google's catalogue, and answers a real call with
+        // "this model is no longer available".
+        'gemini-2.5-flash-lite'
+    ];
     const configured = new ProviderRouter().providers.map(p => p.model);
 
     check('no provider is configured with a known-dead model',

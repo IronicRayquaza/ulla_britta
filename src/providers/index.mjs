@@ -56,10 +56,14 @@ export class ProviderRouter {
             }),
             // Same key, much larger free allowance. The next hop when the primary
             // is throttled rather than broken.
+            //
+            // Not gemini-2.5-flash-lite: Google still lists it, and calling it
+            // answers "this model is no longer available". A catalogue entry is not
+            // proof a model works, which is why preflight.mjs now actually calls it.
             new GeminiProvider({
                 name: 'gemini-lite',
                 apiKey: process.env.GEMINI_API_KEY,
-                model: process.env.GEMINI_LITE_MODEL || 'gemini-2.5-flash-lite'
+                model: process.env.GEMINI_LITE_MODEL || 'gemini-3.5-flash-lite'
             }),
             new OpenAICompatibleProvider({
                 name: 'groq',
@@ -79,6 +83,20 @@ export class ProviderRouter {
         for (const p of this.providers) {
             this.breakers.set(p.name, { failures: 0, openedAt: null });
         }
+
+        // Providers proven unusable for this process: a model the provider will not
+        // run, a key it will not accept, a budget the request cannot fit. None of
+        // those fix themselves, so retrying one on every step of every run costs a
+        // round-trip and fills the log with the same line. Cleared by a restart,
+        // which is also when the configuration can have changed.
+        this.disabled = new Map();   // name -> reason
+    }
+
+    /** Takes a provider out of the ladder for the life of the process. */
+    disableProvider(name, reason) {
+        if (this.disabled.has(name)) return false;
+        this.disabled.set(name, reason);
+        return true;
     }
 
     get availableProviders() {
@@ -220,6 +238,12 @@ export class ProviderRouter {
         let attempted = 0;
 
         for (const provider of usable) {
+            const disabledReason = this.disabled.get(provider.name);
+            if (disabledReason) {
+                errors.push(disabledReason);
+                continue;
+            }
+
             if (this.isOpen(provider.name)) {
                 errors.push(`${provider.name}: circuit open`);
                 continue;
@@ -254,8 +278,16 @@ export class ProviderRouter {
                         continue;
                     }
 
-                    errors.push(ProviderRouter.explain(provider, err));
-                    break;   // wrong model or spent budget — the next provider may differ
+                    const explained = ProviderRouter.explain(provider, err);
+                    errors.push(explained);
+
+                    // A wrong model, a rejected key or an over-budget request will
+                    // fail identically on the next step and the next run. Stop
+                    // paying a round-trip for it every time.
+                    if (kind === Failure.PROVIDER && this.disableProvider(provider.name, explained)) {
+                        console.warn(`⚠️  Taking ${provider.name} out of the ladder: ${explained}`);
+                    }
+                    break;   // the next provider has a different key and catalogue
                 }
             }
         }

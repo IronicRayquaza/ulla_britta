@@ -12,7 +12,11 @@ import { ok, fail, str, num, enumOf, REPO, collect, clampLimit } from './common.
 export default [
     {
         name: 'search_repositories',
-        description: 'Searches public GitHub repositories by topic, keyword, language or star count. Use this to find projects, not to find the user\'s own — list_repositories does that.',
+        description: 'Searches public GitHub repositories by topic, keyword, language, star count or age. '
+            + 'Use this to find projects, not to find the user\'s own — list_repositories does that. '
+            + 'GitHub has no "trending" feed, but this is how you answer that question: pass createdAfter '
+            + 'with a recent date and leave the sort on stars, which finds new projects that have gathered '
+            + 'the most attention. Say that is what you did rather than calling it an official trending list.',
         parameters: {
             type: 'object',
             properties: {
@@ -20,13 +24,35 @@ export default [
                 keyword: str('Free-text keyword'),
                 language: str('Programming language filter'),
                 minStars: num('Minimum star count'),
+                createdAfter: str('Only repositories created after this date, YYYY-MM-DD. Use for "trending" or "new".'),
+                pushedAfter: str('Only repositories pushed to since this date, YYYY-MM-DD. Use for "still active".'),
+                sort: enumOf(['stars', 'forks', 'updated'], 'Ordering, default stars'),
                 limit: num('How many results to return (default 10)')
             }
         },
         handler: async (args, { userId }) => {
             const { client } = await resolveClient(userId);
-            const results = await githubService.searchRepositories(client, args);
-            return ok({ count: results.length, results });
+            try {
+                const { query, total, results } = await githubService.searchRepositories(client, args);
+                return ok({
+                    query,
+                    total,
+                    count: results.length,
+                    results,
+                    // The model should not present this as GitHub's own trending list.
+                    ...(args.createdAfter && {
+                        note: `These are repositories created after ${args.createdAfter}, ordered by stars — `
+                            + 'an approximation of "trending", not an official GitHub ranking.'
+                    })
+                });
+            } catch (e) {
+                if (e.status === 422) {
+                    return fail('BAD_QUERY', `GitHub rejected that search: ${e.message}`, {
+                        hint: 'Dates must be YYYY-MM-DD, and a search needs at least one real term.'
+                    });
+                }
+                throw e;
+            }
         }
     },
 
