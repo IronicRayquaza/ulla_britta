@@ -9,14 +9,33 @@ import { randomUUID } from 'crypto';
  * memory, which vanished on restart and could not be handed to another provider.
  */
 export class GeminiProvider {
-    constructor({ apiKey, model = 'gemini-2.5-flash' } = {}) {
-        this.name = 'gemini';
+    constructor({ apiKey, model = 'gemini-2.5-flash', name = 'gemini' } = {}) {
+        // The router runs two Gemini tiers off one key, so the name is settable:
+        // it keys the circuit breaker, and two tiers must trip independently.
+        this.name = name;
         this.model = model;
+        this.apiKey = apiKey || null;
         this.client = apiKey ? new GoogleGenerativeAI(apiKey) : null;
     }
 
     get available() {
         return this.client !== null;
+    }
+
+    /**
+     * Model ids this key can actually reach.
+     * Used by the boot-time preflight, which exists because a hardcoded model
+     * name silently stopped existing and took every fallback run with it.
+     */
+    async listModels({ timeoutMs = 5000 } = {}) {
+        if (!this.apiKey) return [];
+        const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models?key=${this.apiKey}`,
+            { signal: AbortSignal.timeout(timeoutMs) }
+        );
+        if (!res.ok) throw new Error(`Gemini model list returned ${res.status}`);
+        const body = await res.json();
+        return (body.models || []).map(m => String(m.name).replace(/^models\//, ''));
     }
 
     /**

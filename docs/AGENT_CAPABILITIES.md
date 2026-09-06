@@ -144,6 +144,83 @@ when it changes.
 
 ---
 
+## Troubleshooting
+
+### "The run failed: 404 The model … does not exist"
+
+A model name in the configuration was decommissioned upstream. Model ids rot:
+Groq removed `llama-3.3-70b-versatile` and OpenRouter removed
+`meta-llama/llama-3.3-70b-instruct:free`, both of which were shipped defaults here.
+
+The boot log now tells you before a user finds out — `preflight.mjs` checks every
+configured model against the provider's live catalogue at startup and names both
+the fix and the working alternatives. To check by hand:
+
+```bash
+curl -s https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY" | jq -r '.data[].id'
+curl -s "https://generativelanguage.googleapis.com/v1beta/models?key=$GEMINI_API_KEY" | jq -r '.models[].name'
+```
+
+Then set `GEMINI_MODEL`, `GEMINI_LITE_MODEL`, `GROQ_MODEL` or `OPENROUTER_MODEL`.
+
+A model failure no longer ends a run: an unknown model, a rejected key or an
+over-budget request is the *provider's* problem, so the router moves to the next
+one. Only a genuinely malformed request stops everything, because that one really
+does fail identically everywhere.
+
+### The provider ladder
+
+| Order | Provider | Default model |
+| --- | --- | --- |
+| 1 | `gemini` | `gemini-2.5-flash` |
+| 2 | `gemini-lite` | `gemini-2.5-flash-lite` — same key, larger free allowance |
+| 3 | `groq` | `openai/gpt-oss-120b` |
+| 4 | `openrouter` | `nvidia/nemotron-3-ultra-550b-a55b:free` |
+
+A run makes one request per step, so a long task can trip a per-minute quota
+partway through. Tier 2 exists so it degrades inside the same model family before
+changing vendor. A throttled provider also gets one retry in place, honouring the
+`retryDelay` Google returns, capped at 5s.
+
+### Groq's free tier cannot run this agent
+
+The 88-tool schema is about **12,000 tokens on every request**. Groq's on-demand
+free tier caps a request at **8,000 tokens** for every tool-capable model, so it
+refuses each call with a 413 before the conversation starts. Its only high-budget
+models, `groq/compound` and `groq/compound-mini` (70,000 TPM), answer tool calls
+with *"tool calling is not supported with this model"*.
+
+So on a free Groq key the ladder is effectively **gemini → gemini-lite**, and Groq
+is stepped over. The preflight says so at boot:
+
+```
+❌ groq allows 8000 tokens per request, but the agent's tool schema alone is
+   about 11708. Every run that reaches groq will be refused.
+```
+
+To get a third tier, either raise the Groq limit (Dev tier) or set
+`OPENROUTER_API_KEY`. Shrinking the tool surface would also work, at the cost of
+what the agent can do — the schema size is the price of the coverage above.
+
+### "This dashboard login has no GitHub App installation linked to it"
+
+An installation belongs to **one dashboard login**, not to a GitHub account. Signing
+up twice — a second email, a different sign-in method — leaves the app installed
+and the new login with no access. Tenant isolation is doing its job.
+
+Check which login owns it:
+
+```sql
+select p.github_username, i.installation_id, i.account_login, i.user_id
+from github_installations i join profiles p using (user_id);
+```
+
+Either sign in as that user, or re-run `/onboarding` while signed in as the login
+you want — the install callback upserts on `installation_id` and moves it. It
+cannot belong to both.
+
+---
+
 ## Adding a tool
 
 1. Put it in the module for its GitHub domain under `src/agent/tools/`.

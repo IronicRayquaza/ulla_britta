@@ -83,10 +83,18 @@ export async function resolveInstallation(userId, repoFullName = '') {
     const owner = (repoFullName || '').split('/')[0];
 
     if (!others.length) {
+        // An installation belongs to ONE dashboard login. Somebody who signed up
+        // twice — a second email, a different sign-in method — lands here with the
+        // app installed and no access, and the old message ("install Ulla Britta
+        // on your account") sent them to reinstall something they already had.
         throw new AccessError(
-            'You have not connected a GitHub account yet. Install Ulla Britta on your account to give me access.',
+            'This dashboard login has no GitHub App installation linked to it. '
+            + 'If you installed Ulla Britta while signed in under a different dashboard account, '
+            + 'sign in with that one — an installation belongs to a single login, not to your GitHub account.',
             'NO_INSTALLATION',
-            'https://github.com/settings/installations'
+            'If this is the login you want to use, open Settings and connect GitHub: '
+            + 'reinstalling while signed in here moves the installation to this login. '
+            + 'Manage installations at https://github.com/settings/installations.'
         );
     }
 

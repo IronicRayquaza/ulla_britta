@@ -19,6 +19,39 @@ export class OpenAICompatibleProvider {
         return this.client !== null;
     }
 
+    /**
+     * Model ids this key can actually reach.
+     * Groq removed `llama-3.3-70b-versatile` while it was still the hardcoded
+     * default here; the preflight that calls this is what would have caught it.
+     */
+    async listModels({ timeoutMs = 5000 } = {}) {
+        if (!this.client) return [];
+        const page = await this.client.models.list({ timeout: timeoutMs });
+        return (page.data || []).map(m => m.id);
+    }
+
+    /**
+     * The per-request token budget this key actually gets, read from the rate
+     * limit headers on a one-token request.
+     *
+     * A model can exist and still be unusable. Groq's free tier caps a request at
+     * 8,000 tokens while this agent's tool schema alone is larger, so every call
+     * to it fails with a 413 — the model list says nothing about that. Costs a
+     * single token to find out.
+     *
+     * @returns {Promise<number|null>} tokens per minute, or null when unknown.
+     */
+    async probeTokenLimit({ timeoutMs = 5000 } = {}) {
+        if (!this.client) return null;
+        const res = await this.client.chat.completions
+            .create({ model: this.model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 },
+                { timeout: timeoutMs })
+            .withResponse();
+
+        const limit = res.response?.headers?.get?.('x-ratelimit-limit-tokens');
+        return limit ? Number(limit) : null;
+    }
+
     static toolsFor(tools) {
         if (!tools || tools.length === 0) return undefined;
         return tools.map(t => ({

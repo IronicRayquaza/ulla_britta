@@ -2,6 +2,8 @@ import queueService from './queue.mjs';
 import { processEvent } from './processor.mjs';
 import vercelSentinel from './services/vercel-sentinel.service.mjs';
 import dotenv from 'dotenv';
+import router from './providers/index.mjs';
+import { checkModelsInBackground } from './providers/preflight.mjs';
 
 dotenv.config();
 
@@ -133,5 +135,9 @@ async function handleFailure(event, error) {
     // Keep the dead-letter queue bounded; it is a diagnostic buffer, not storage.
     await queueService.client.ltrim(FAILED_QUEUE, 0, 199);
 }
+
+// Same catalogue check the receiver runs. The worker is where agent runs actually
+// execute, so a rotted model name matters most here.
+checkModelsInBackground(router);
 
 startWorker();

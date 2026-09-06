@@ -35,8 +35,17 @@ round limit. Tools return structured results, so a retryable failure and a
 permission failure are different things to the model.
 
 `src/providers/` normalises messages across providers, so a run that starts on
-Gemini and hits a rate limit continues on Groq **with its full history**, rather
-than restarting with amnesia.
+Gemini and hits a rate limit continues on the next tier **with its full history**,
+rather than restarting with amnesia. The ladder is `gemini` → `gemini-lite`
+(same key, larger free allowance) → `groq` → `openrouter`.
+
+Failures are sorted by whose fault they are. A throttle is retried in place once;
+an unknown model, a rejected key or an over-budget request is that **provider's**
+problem, so the run moves to the next one; only a genuinely malformed request stops
+everything. Model ids rot — two shipped defaults were decommissioned upstream
+without anyone noticing — so `src/providers/preflight.mjs` checks each configured
+model against the provider's live catalogue at boot and says what to set instead.
+See [docs/AGENT_CAPABILITIES.md](docs/AGENT_CAPABILITIES.md#troubleshooting).
 
 ### What it can reach
 
@@ -69,12 +78,17 @@ Two rules the code enforces rather than the prompt:
 ```bash
 cp .env.example .env     # then fill it in
 npm install
-npm test                 # 246 checks, no network needed
+npm test                 # 302 checks, no network needed
 npm start
 ```
 
 At least one of `GEMINI_API_KEY`, `GROQ_API_KEY` or `OPENROUTER_API_KEY` is
-required. Gemini's free tier carries normal load; Groq takes over when it throttles.
+required. Gemini's free tier carries normal load.
+
+Note that a **free Groq key cannot run this agent**: its 8,000-token per-request
+cap is smaller than the ~12,000-token tool schema, so every call is refused with a
+413. The router steps over it and the boot log says so. Groq needs a raised limit
+to be a useful tier.
 
 ### Database
 
@@ -149,5 +163,6 @@ regress:
 | `narration` | Runs are legible: what it is doing, and the evidence it did it |
 | `capabilities` | Every Octokit method called exists; the registry and the docs agree |
 | `tool-smoke` | Every read-only tool answers for real against a stand-in GitHub |
+| `preflight` | A decommissioned or over-budget model is caught at boot, not mid-run |
 
 They run offline in about two seconds.

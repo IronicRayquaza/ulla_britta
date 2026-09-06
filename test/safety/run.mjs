@@ -28,7 +28,8 @@ const suites = [
     'tenancy.test.mjs',
     'narration.test.mjs',
     'capabilities.test.mjs',
-    'tool-smoke.test.mjs'
+    'tool-smoke.test.mjs',
+    'preflight.test.mjs'
 ];
 
 let failed = 0;

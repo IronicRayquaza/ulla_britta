@@ -16,6 +16,8 @@ import requireAuth from './middleware/auth.mjs';
 import runsRouter from './routes/runs.mjs';
 import * as githubOAuth from './services/github-oauth.service.mjs';
 import { capabilityMap } from './agent/tools/index.mjs';
+import router from './providers/index.mjs';
+import { checkModelsInBackground } from './providers/preflight.mjs';
 
 dotenv.config();
 
@@ -442,4 +444,10 @@ app.get('/api/system/queue', requireAuth, async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Ingestion Tier online. Monitoring at /health`));
+app.listen(PORT, () => {
+    console.log(`🚀 Ingestion Tier online. Monitoring at /health`);
+    // Check the configured models against each provider's live catalogue. A model
+    // name that has been decommissioned upstream otherwise stays invisible until
+    // a user's run dies on it mid-task.
+    checkModelsInBackground(router);
+});
