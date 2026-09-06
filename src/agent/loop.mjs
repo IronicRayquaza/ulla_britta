@@ -184,6 +184,13 @@ export function describeOutcome({ stopReason, text, performed, error = null }) {
     }
 
     if (stopReason === 'error') {
+        // When every model provider refused, each one refused for its own reason
+        // and each reason has its own fix. Joined into one line they are unreadable
+        // in a chat bubble, which is where this text ends up.
+        if (error?.providerErrors?.length) {
+            const reasons = error.providerErrors.map(r => `- ${r}`).join('\n');
+            return `❌ **No model provider could answer.**\n\n${reasons}\n\n${ledger()}`;
+        }
         return `❌ **The run failed:** ${error?.message || 'unknown error'}\n\n${ledger()}`;
     }
 

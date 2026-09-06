@@ -101,4 +101,32 @@ const registry = new ToolRegistry().register({
     check('doing nothing is stated as nothing', /did not take any action/i.test(empty), empty);
 }
 
+// ── 5. A failure the operator has to fix says what to fix ───────────────────
+// This text is what a user reads in the chat window. When every model provider
+// refused, each refused for its own reason and each reason has its own fix;
+// joined into one line they are unreadable.
+{
+    const err = new Error('No model provider could answer. a | b | c');
+    err.code = 'ALL_PROVIDERS_FAILED';
+    err.providerErrors = [
+        'gemini rejected its API key. Check the key for gemini in the environment.',
+        'groq does not serve "openai/gone". Set GROQ_MODEL to a model it currently offers.'
+    ];
+
+    const out = describeOutcome({ stopReason: 'error', text: '', performed: [], error: err });
+
+    check('each provider gets its own line', out.split('\n').filter(l => l.startsWith('- ')).length === 2, out);
+    check('the model to fix is named', out.includes('GROQ_MODEL'), out);
+    check('the key problem is named too', out.includes('rejected its API key'), out);
+    check('it does not run the reasons together on one line', !out.includes(' | '), out);
+
+    // An ordinary error is still reported plainly.
+    const plain = describeOutcome({
+        stopReason: 'error', text: '', performed: [],
+        error: new Error('Redis unreachable')
+    });
+    check('an error with no provider detail reads as before',
+        /The run failed:.*Redis unreachable/.test(plain), plain);
+}
+
 report('honest failure reporting');

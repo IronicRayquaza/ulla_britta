@@ -78,7 +78,7 @@ Two rules the code enforces rather than the prompt:
 ```bash
 cp .env.example .env     # then fill it in
 npm install
-npm test                 # 302 checks, no network needed
+npm test                 # 307 checks, no network needed
 npm start
 ```
 
