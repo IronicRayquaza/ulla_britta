@@ -312,6 +312,51 @@ class DatabaseService {
         return data?.installation_id ? shapeInstallation(data) : null;
     }
 
+    /**
+     * Points a user's record at the installation id GitHub is using now.
+     *
+     * A reinstall issues a new id and invalidates the old one. The row is keyed on
+     * installation_id, so the stale row is removed rather than updated in place —
+     * otherwise the unique index rejects the write and the record stays wrong.
+     */
+    async relinkInstallation(userId, install) {
+        if (!this.client || !userId) return;
+
+        await this.client
+            .from('github_installations')
+            .delete()
+            .eq('user_id', userId)
+            .ilike('account_login', install.login);
+
+        const { error } = await this.client.from('github_installations').upsert({
+            user_id: userId,
+            installation_id: install.installationId,
+            account_login: install.login,
+            account_type: install.type,
+            repositories_access: install.repositorySelection,
+            status: 'active',
+            installed_at: new Date().toISOString(),
+            last_sync_at: new Date().toISOString()
+        }, { onConflict: 'installation_id' });
+
+        if (error) throw new Error(`Could not record installation ${install.installationId}: ${error.message}`);
+
+        // Webhook attribution reads profiles.github_username, so keep it in step.
+        await this.linkGithubAccount(userId, install.login).catch(() => {});
+    }
+
+    /**
+     * The App was uninstalled. The row is dropped rather than flagged, because
+     * every lookup treats a present row as usable access.
+     */
+    async markInstallationRemoved(installationId) {
+        if (!this.client) return;
+        await this.client
+            .from('github_installations')
+            .delete()
+            .eq('installation_id', Number(installationId));
+    }
+
     /** Every installation this user owns, newest first. */
     async listInstallationsForUser(userId) {
         if (!this.client || !userId) return [];

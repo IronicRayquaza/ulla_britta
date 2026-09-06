@@ -252,6 +252,106 @@ function allSourceFiles(dir) {
     check('the surviving property is kept', Boolean(cleaned.properties.keep));
 }
 
+// ── 4b. A reinstall must not need a human ───────────────────────────────────
+// Uninstalling and reinstalling the App issues a NEW installation id and retires
+// the old one. Nothing was listening for that, so the recorded id went stale and
+// every call died minting a token — surfaced to the user as
+// "Not Found - https://docs.github.com/rest/reference/apps#create-an-...".
+// The account name survives a reinstall even though the id does not, so the live
+// installation can be found and the record corrected without asking anybody.
+{
+    const access = await import('../../src/agent/github-access.mjs');
+
+    const original = {
+        getInstallationForUser: databaseService.getInstallationForUser,
+        listInstallationsForUser: databaseService.listInstallationsForUser,
+        relinkInstallation: databaseService.relinkInstallation,
+        getInstallation: githubService.getInstallation,
+        findInstallationForAccount: githubService.findInstallationForAccount,
+        getClient: githubService.getClient
+    };
+
+    const STALE = 125781221;
+    const LIVE = 159531330;
+    let recorded = { installationId: STALE, login: 'IronicRayquaza', type: 'User', repositorySelection: 'selected' };
+    const relinked = [];
+
+    databaseService.getInstallationForUser = async () => recorded;
+    databaseService.listInstallationsForUser = async () => [recorded];
+    databaseService.relinkInstallation = async (userId, install) => {
+        relinked.push([userId, install.installationId]);
+        recorded = { ...install };
+    };
+    githubService.getInstallation = async (id) => {
+        if (Number(id) === STALE) { const e = new Error('Not Found'); e.status = 404; throw e; }
+        return { id: Number(id) };
+    };
+    githubService.findInstallationForAccount = async (login) => ({
+        id: LIVE,
+        account: { login, type: 'User' },
+        repository_selection: 'all'
+    });
+    githubService.getClient = async (id) => ({ __installationId: Number(id), rest: {} });
+
+    access.clearInstallationCache();
+    const resolved = await access.resolveClient('u1');
+
+    check('a retired installation id is replaced with the live one',
+        resolved.installationId === LIVE, resolved.installationId);
+    check('the client is built for the new id',
+        resolved.client.__installationId === LIVE, resolved.client.__installationId);
+    check('the correction is written back exactly once',
+        relinked.length === 1 && relinked[0][1] === LIVE, relinked);
+    check('the fresh repository scope is picked up too',
+        resolved.account.repositorySelection === 'all', resolved.account);
+
+    // Asking GitHub on every single call would be wasteful; once per process is enough.
+    let probes = 0;
+    githubService.getInstallation = async () => { probes++; return { id: LIVE }; };
+    await access.resolveClient('u1');
+    await access.resolveClient('u1');
+    check('a healthy installation is verified once, not per call', probes === 0, probes);
+
+    // GitHub being unreachable is not evidence that anything was uninstalled.
+    access.clearInstallationCache();
+    recorded = { installationId: LIVE, login: 'IronicRayquaza', type: 'User', repositorySelection: 'all' };
+    relinked.length = 0;
+    githubService.getInstallation = async () => { const e = new Error('bad gateway'); e.status = 502; throw e; };
+    const degraded = await access.resolveClient('u1');
+    check('a transient error does not trigger a relink',
+        relinked.length === 0 && degraded.installationId === LIVE, [relinked, degraded.installationId]);
+
+    // Genuinely uninstalled: say so, and say what to do.
+    access.clearInstallationCache();
+    githubService.getInstallation = async () => { const e = new Error('Not Found'); e.status = 404; throw e; };
+    githubService.findInstallationForAccount = async () => null;
+
+    let gone = null;
+    try {
+        await access.resolveClient('u1');
+    } catch (e) {
+        gone = e;
+    }
+    check('an app that is really gone is reported as gone',
+        gone?.code === 'INSTALLATION_GONE', gone?.code);
+    check('and the message does not leak a documentation URL as an explanation',
+        !(gone?.message || '').includes('docs.github.com/rest/reference'), gone?.message);
+    check('the hint says how to fix it',
+        /reinstall/i.test(gone?.hint || ''), gone?.hint);
+
+    Object.assign(databaseService, {
+        getInstallationForUser: original.getInstallationForUser,
+        listInstallationsForUser: original.listInstallationsForUser,
+        relinkInstallation: original.relinkInstallation
+    });
+    Object.assign(githubService, {
+        getInstallation: original.getInstallation,
+        findInstallationForAccount: original.findInstallationForAccount,
+        getClient: original.getClient
+    });
+    access.clearInstallationCache();
+}
+
 // ── 5. Every Octokit method named actually exists ───────────────────────────
 {
     // The original failure was a call to a method Octokit does not define. It got

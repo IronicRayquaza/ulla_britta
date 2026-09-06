@@ -106,12 +106,79 @@ export async function resolveInstallation(userId, repoFullName = '') {
     );
 }
 
+/** Installation ids confirmed live during this process, so we ask GitHub once. */
+const verifiedInstallations = new Set();
+
+export function clearInstallationCache() {
+    verifiedInstallations.clear();
+}
+
+/**
+ * Confirms the recorded installation still exists, and repairs it when it does not.
+ *
+ * Uninstalling and reinstalling the App issues a NEW installation id and quietly
+ * invalidates the old one. Nothing noticed: the stored id stayed in the database,
+ * every call died minting a token, and the agent reported
+ * "Not Found - https://docs.github.com/rest/reference/apps#create-an-installation-access-token-for-an-app"
+ * — a documentation link, to a user, as an explanation.
+ *
+ * The account is stable even though the id is not, so the live installation can
+ * simply be looked up and the record corrected without troubling anybody.
+ */
+async function ensureLiveInstallation(userId, install) {
+    if (verifiedInstallations.has(install.installationId)) return install;
+
+    try {
+        await githubService.getInstallation(install.installationId);
+        verifiedInstallations.add(install.installationId);
+        return install;
+    } catch (err) {
+        if (err.status !== 404) {
+            // GitHub being unreachable is not evidence the installation is gone.
+            verifiedInstallations.add(install.installationId);
+            return install;
+        }
+    }
+
+    console.warn(`⚠️  Installation ${install.installationId} no longer exists; looking for a current one on ${install.login}.`);
+
+    const fresh = await githubService.findInstallationForAccount(install.login).catch(() => null);
+    if (!fresh) {
+        throw new AccessError(
+            `The GitHub App installation recorded for ${install.login} no longer exists, and the App is `
+            + `not installed on that account now. It was probably uninstalled.`,
+            'INSTALLATION_GONE',
+            `Reinstall Ulla Britta on ${install.login} at https://github.com/settings/installations, `
+            + 'then it will reconnect automatically.'
+        );
+    }
+
+    await databaseService.relinkInstallation(userId, {
+        installationId: fresh.id,
+        login: fresh.account?.login || install.login,
+        type: fresh.account?.type || install.type,
+        repositorySelection: fresh.repository_selection || 'unknown'
+    });
+
+    verifiedInstallations.add(fresh.id);
+    console.log(`✅ Reconnected ${install.login}: installation ${install.installationId} → ${fresh.id}`);
+
+    return {
+        installationId: fresh.id,
+        login: fresh.account?.login || install.login,
+        type: fresh.account?.type || install.type,
+        repositorySelection: fresh.repository_selection || 'unknown'
+    };
+}
+
 /**
  * An installation-authenticated client, scoped to `repoFullName` when given.
  * @returns {{ client, installationId, account: { login, type, repositorySelection } }}
  */
 export async function resolveClient(userId, repoFullName = '') {
-    const install = await resolveInstallation(userId, repoFullName);
+    const recorded = await resolveInstallation(userId, repoFullName);
+    const install = await ensureLiveInstallation(userId, recorded);
+
     return {
         client: await githubService.getClient(install.installationId),
         installationId: install.installationId,

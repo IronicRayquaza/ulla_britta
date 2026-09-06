@@ -449,5 +449,9 @@ app.listen(PORT, () => {
     // Check the configured models against each provider's live catalogue. A model
     // name that has been decommissioned upstream otherwise stays invisible until
     // a user's run dies on it mid-task.
-    checkModelsInBackground(router);
+    //
+    // Catalogue only here: the live probe costs a request, gemini-2.5-flash allows
+    // 20 a day on the free tier, and this process does not run agent turns — the
+    // worker does, and it probes properly.
+    checkModelsInBackground(router, { probeCalls: false });
 });

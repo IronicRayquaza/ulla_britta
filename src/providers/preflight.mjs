@@ -25,7 +25,8 @@ const DEFAULT_TIMEOUT_MS = 5000;
 export async function checkModels(router, {
     logger = console,
     timeoutMs = DEFAULT_TIMEOUT_MS,
-    toolSpecs = null
+    toolSpecs = null,
+    probeCalls = true
 } = {}) {
     const providers = router.providers.filter(p => p.available);
 
@@ -66,7 +67,11 @@ export async function checkModels(router, {
         // no longer available" — so the catalogue check passed, the model shipped,
         // and every run that reached that tier failed with a 404. The only honest
         // check is to actually call it.
-        if (typeof provider.complete === 'function') {
+        //
+        // That call is not free: gemini-2.5-flash allows 20 requests per DAY on the
+        // free tier, so probing from every process on every deploy spends real
+        // budget. Only the process that actually runs agent turns probes.
+        if (probeCalls && typeof provider.complete === 'function') {
             try {
                 await provider.complete({
                     messages: [{ role: 'user', content: 'ok' }],

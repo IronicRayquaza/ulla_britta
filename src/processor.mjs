@@ -16,6 +16,54 @@ import { checkRepoHealth, formatHealthReport } from './services/health.service.m
 import { executeRun } from './runs/service.mjs';
 import path from 'path';
 
+/**
+ * Keeps github_installations in step with what GitHub actually has.
+ *
+ * The dashboard writes this row once, during onboarding. Everything that happens
+ * to an installation afterwards — reinstalling it, granting it more repositories,
+ * removing it — happens on GitHub, and until now none of it reached us. A user who
+ * reinstalled ended up with a recorded installation id that GitHub had already
+ * retired, and every subsequent call failed while minting a token.
+ *
+ * The account name is the stable link back to a dashboard user, through
+ * profiles.github_username.
+ */
+async function syncInstallation(payload) {
+    const action = payload.action;
+    const install = payload.installation;
+    const login = install?.account?.login;
+
+    if (!install?.id || !login) {
+        console.log(`⚠️  Installation event with no account to attribute it to; ignoring.`);
+        return;
+    }
+
+    const userId = await databaseService.getUserIdByGithubUsername(login);
+    if (!userId) {
+        // Someone installed the App before connecting a dashboard account. Nothing
+        // to attach it to yet; onboarding will record it when they sign up.
+        await logger.warn(`Installation ${install.id} on ${login} has no dashboard account yet; leaving it unlinked.`);
+        return;
+    }
+
+    if (action === 'deleted') {
+        await databaseService.markInstallationRemoved(install.id);
+        await logger.warn(`GitHub App removed from ${login} (installation ${install.id}).`);
+        return;
+    }
+
+    await databaseService.relinkInstallation(userId, {
+        installationId: install.id,
+        login,
+        type: install.account?.type || 'User',
+        repositorySelection: install.repository_selection || 'unknown'
+    });
+
+    await logger.success(
+        `Installation ${install.id} on ${login} recorded (${action}, ${install.repository_selection || 'unknown'} repositories).`
+    );
+}
+
 export async function processEvent(event) {
     const { type, payload } = event;
 
@@ -27,6 +75,14 @@ export async function processEvent(event) {
 
     let installationId = payload.installation?.id || payload.installationId || (payload.installation && typeof payload.installation === 'number' ? payload.installation : null);
     const repository = payload.repository?.full_name || payload.repository;
+
+    // Installation lifecycle carries no repository, so it fell straight through the
+    // guard below and was skipped. That is how a reinstall — which issues a NEW
+    // installation id and invalidates the old one — left the database pointing at
+    // an installation that no longer existed, with nothing to notice.
+    if (type === 'installation' || type === 'installation_repositories') {
+        return syncInstallation(payload);
+    }
 
     // Vercel Fallback: Lookup installation ID if missing
     if (!installationId && repository && type === 'vercel_failure') {

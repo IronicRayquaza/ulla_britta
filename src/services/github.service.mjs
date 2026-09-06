@@ -15,6 +15,56 @@ class GitHubService {
     });
   }
 
+  /**
+   * An Octokit authenticated as the App itself, not as an installation.
+   *
+   * Needed to ask GitHub about installations — including whether the one we have
+   * recorded still exists. A reinstall issues a NEW installation id and silently
+   * invalidates the old one, so a stored id can stop working with no warning and
+   * no webhook we were listening for.
+   */
+  appClient() {
+    if (!process.env.GITHUB_APP_ID || !process.env.GITHUB_PRIVATE_KEY) {
+      throw new Error('GITHUB_APP_ID and GITHUB_PRIVATE_KEY are required to talk to GitHub as the App.');
+    }
+    return new Octokit({
+      authStrategy: createAppAuth,
+      auth: {
+        appId: process.env.GITHUB_APP_ID,
+        privateKey: process.env.GITHUB_PRIVATE_KEY.replace(/\\n/g, '\n')
+      }
+    });
+  }
+
+  /** Throws with status 404 when the installation no longer exists. */
+  async getInstallation(installationId) {
+    const { data } = await this.appClient().rest.apps.getInstallation({
+      installation_id: Number(installationId)
+    });
+    return data;
+  }
+
+  /**
+   * The App's current installation on an account, whatever its id is now.
+   * This is what makes a stale id recoverable without asking the user to do
+   * anything: the account is stable, the installation id is not.
+   */
+  async findInstallationForAccount(login) {
+    const app = this.appClient();
+    for (const lookup of [
+      () => app.rest.apps.getUserInstallation({ username: login }),
+      () => app.rest.apps.getOrgInstallation({ org: login })
+    ]) {
+      try {
+        const { data } = await lookup();
+        return data;
+      } catch (e) {
+        if (e.status !== 404) throw e;
+      }
+    }
+    return null;
+  }
+
   async getClientForOrg(orgName) {
     const appOctokit = new Octokit({
       authStrategy: createAppAuth,
